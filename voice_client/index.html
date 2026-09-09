@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="vi">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>DQ Voice Client</title>
+    <link rel="stylesheet" href="style.css" />
+  </head>
+  <body>
+    <main class="shell">
+      <header>
+        <div>
+          <p class="eyebrow">VOICE AI</p>
+          <h1>Trò chuyện bằng giọng nói</h1>
+          <p class="subtitle">Whisper · Ollama + Knowledge · Kokoro</p>
+        </div>
+        <button class="icon-button" id="settingsButton" aria-label="Mở cấu hình">⚙</button>
+      </header>
+
+      <section class="settings" id="settingsPanel" hidden>
+        <label>Voice server URL
+          <input id="serverUrl" type="url" placeholder="http://192.168.1.10:8000" />
+        </label>
+        <label>API key <span>(để trống nếu server không dùng key)</span>
+          <input id="apiKey" type="password" autocomplete="off" placeholder="API_KEY" />
+        </label>
+        <div class="settings-row">
+          <label>Session ID
+            <input id="sessionId" type="text" />
+          </label>
+          <label>Ngôn ngữ nói
+            <select id="language"><option value="vi">Tiếng Việt</option><option value="en">English</option><option value="">Tự nhận diện</option></select>
+          </label>
+        </div>
+        <button id="saveSettings" class="secondary">Lưu cấu hình</button>
+        <p id="connectionStatus" class="status"></p>
+      </section>
+
+      <section id="conversation" class="conversation" aria-live="polite">
+        <div class="empty-state" id="emptyState">Nhấn nút micro, nói câu hỏi, sau đó nhấn lại để gửi.</div>
+      </section>
+
+      <section class="controls">
+        <p id="recordingStatus" class="recording-status">Sẵn sàng</p>
+        <button id="recordButton" class="record-button" type="button" aria-label="Bắt đầu ghi âm">
+          <span class="mic">●</span><span id="recordLabel">Bắt đầu nói</span>
+        </button>
+        <div class="file-row">
+          <label class="upload-button">Tải audio lên<input id="audioFile" type="file" accept="audio/*" hidden /></label>
+          <span id="fileName"></span>
+        </div>
+      </section>
+    </main>
+    <template id="messageTemplate">
+      <article class="turn">
+        <audio controls preload="metadata"></audio>
+      </article>
+    </template>
+    <script src="app.js"></script>
+  </body>
+</html>
