@@ -1,4 +1,7 @@
 import base64
+from time import perf_counter
+from uuid import uuid4
+from .progress import log, request_id
 from contextlib import asynccontextmanager
 
 import httpx
@@ -41,11 +44,35 @@ async def lifespan(app: FastAPI):
         "chat": OllamaChat(settings),
         "sessions": SessionStore(settings.max_history_messages),
     }
+    if settings.warmup_on_start:
+        start = perf_counter()
+        log("Model warmup | warming up Kokoro, Whisper and Ollama before accepting requests")
+        services = app.state.services
+        wav = await services["tts"].synthesize("Ready.")
+        await services["stt"].transcribe(wav, "en")
+        await services["chat"].complete([{"role": "user", "content": "Reply with only the word Ready."}])
+        log("Model warmup | ready after %.2fs", perf_counter() - start)
     yield
 
 
 app = FastAPI(title="Voice AI Server", version="1.0.0", lifespan=lifespan)
 app.add_middleware(CORSMiddleware, allow_origins=get_settings().allowed_origins, allow_credentials=False, allow_methods=["*"], allow_headers=["*"])
+
+
+@app.middleware("http")
+async def log_request(request: Request, call_next):
+    token = request_id.set(uuid4().hex[:8])
+    start = perf_counter()
+    try:
+        log("HTTP | %s %s | started", request.method, request.url.path)
+        response = await call_next(request)
+        log("HTTP | status=%d | total %.2fs", response.status_code, perf_counter() - start)
+        return response
+    except Exception:
+        log("HTTP | unhandled error | total %.2fs", perf_counter() - start)
+        raise
+    finally:
+        request_id.reset(token)
 
 
 @app.get("/healthz")
@@ -56,6 +83,7 @@ async def healthz():
 @app.post("/v1/audio/transcriptions", dependencies=[Depends(require_api_key)])
 async def transcriptions(audio: UploadFile = File(...), language: str | None = Form(default=None), services=Depends(get_services)):
     data = await audio.read(services["settings"].max_audio_bytes + 1)
+    log("Audio received | %d bytes", len(data))
     if not data or len(data) > services["settings"].max_audio_bytes:
         raise HTTPException(413, "Audio is empty or exceeds MAX_AUDIO_BYTES")
     try:
@@ -91,6 +119,7 @@ async def voice_chat(
     voice: str | None = Form(default=None), model: str | None = Form(default=None), response_format: str = Form(default="audio"), services=Depends(get_services),
 ):
     data = await audio.read(services["settings"].max_audio_bytes + 1)
+    log("Audio received | %d bytes", len(data))
     if not data or len(data) > services["settings"].max_audio_bytes:
         raise HTTPException(413, "Audio is empty or exceeds MAX_AUDIO_BYTES")
     try:
@@ -98,6 +127,7 @@ async def voice_chat(
         if not transcript:
             raise ValueError("No speech detected")
         messages = services["sessions"].messages(session_id, transcript)
+        log("Conversation history | %d messages", len(messages))
         answer = await services["chat"].complete(messages, model)
         services["sessions"].save(session_id, transcript, answer)
         wav = await services["tts"].synthesize(answer, voice)

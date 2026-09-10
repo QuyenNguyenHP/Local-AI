@@ -3,9 +3,10 @@
 import json
 import re
 from pathlib import Path
+from .progress import log
 
 
-DEFAULT_RULES = Path(__file__).resolve().parent / "knowledge_rules.json"
+DEFAULT_RULES = Path(__file__).resolve().parents[2] / "knowledge_rules.json"
 
 
 def matching_notes(question: str, rules_path: Path = DEFAULT_RULES) -> str:
@@ -34,8 +35,12 @@ def matching_notes(question: str, rules_path: Path = DEFAULT_RULES) -> str:
             break
         content = path.read_text(encoding="utf-8")
         clipped = content[:remaining]
+        selected_chars = len(clipped)
         remaining -= len(clipped)
         if len(clipped) < len(content):
             clipped += "\n[Note truncated because of the size limit.]"
+        log("Knowledge | file=%s, selected=%d characters, truncated=%s", rule["file"], selected_chars, selected_chars < len(content))
         sections.append(f"Source: {rule['file']}\n{clipped}")
+    if not sections:
+        log("Knowledge | no files matched the keywords")
     return "\n\n".join(sections)

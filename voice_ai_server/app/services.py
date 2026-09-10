@@ -1,20 +1,15 @@
 import asyncio
 import io
 import json
-import sys
 from collections import defaultdict
-from pathlib import Path
 
 import httpx
 
 from .config import Settings
 
-# Reuse the terminal and web-chat knowledge path verbatim.  services.py is
-# <workspace>/voice_ai_server/app/services.py, so parents[2] is the workspace.
-WORKSPACE_ROOT = Path(__file__).resolve().parents[2]
-if str(WORKSPACE_ROOT) not in sys.path:
-    sys.path.insert(0, str(WORKSPACE_ROOT))
-from chat import build_context  # noqa: E402
+from .context import build_context
+from .progress import log, stage
+from time import perf_counter
 
 
 class SpeechToText:
@@ -28,6 +23,7 @@ class SpeechToText:
     async def _get_model(self):
         async with self._lock:
             if self._model is None:
+                log("Loading Whisper | model=%s device=%s compute=%s", self.settings.whisper_model, self.settings.whisper_device, self.settings.whisper_compute_type)
                 from faster_whisper import WhisperModel
                 self._model = await asyncio.to_thread(
                     WhisperModel,
@@ -37,16 +33,19 @@ class SpeechToText:
                 )
             return self._model
 
+    @stage("Whisper: audio -> text")
     async def transcribe(self, audio: bytes, language: str | None = None) -> tuple[str, str | None]:
         model = await self._get_model()
 
         def run():
             segments, info = model.transcribe(
-                io.BytesIO(audio), language=language, vad_filter=True, beam_size=5
+                io.BytesIO(audio), language=language, vad_filter=True, beam_size=self.settings.whisper_beam_size
             )
             return " ".join(segment.text.strip() for segment in segments).strip(), info.language
 
-        return await asyncio.to_thread(run)
+        result = await asyncio.to_thread(run)
+        log("Whisper | language=%s, text=%d characters", result[1], len(result[0]))
+        return result
 
 
 class TextToSpeech:
@@ -58,10 +57,16 @@ class TextToSpeech:
     async def _get_pipeline(self):
         async with self._lock:
             if self._pipeline is None:
+                log("Loading Kokoro model | language=%s", self.settings.kokoro_lang_code)
+                import warnings
+                # Known upstream warnings only; retain other warnings and errors.
+                warnings.filterwarnings("ignore", message="dropout option adds dropout after all but last recurrent layer.*", category=UserWarning, module=r"torch\.nn\.modules\.rnn")
+                warnings.filterwarnings("ignore", message=r"`torch\.nn\.utils\.weight_norm` is deprecated.*", category=FutureWarning, module=r"torch\.nn\.utils\.weight_norm")
                 from kokoro import KPipeline
-                self._pipeline = await asyncio.to_thread(KPipeline, lang_code=self.settings.kokoro_lang_code)
+                self._pipeline = await asyncio.to_thread(KPipeline, lang_code=self.settings.kokoro_lang_code, repo_id="hexgrad/Kokoro-82M")
             return self._pipeline
 
+    @stage("Kokoro: text -> audio")
     async def synthesize(self, text: str, voice: str | None = None, speed: float = 1.0) -> bytes:
         pipeline = await self._get_pipeline()
         selected_voice = voice or self.settings.kokoro_voice
@@ -78,20 +83,27 @@ class TextToSpeech:
             sf.write(output, np.concatenate(pieces), 24000, format="WAV", subtype="PCM_16")
             return output.getvalue()
 
-        return await asyncio.to_thread(run)
+        wav = await asyncio.to_thread(run)
+        log("Kokoro | voice=%s, WAV=%d bytes", selected_voice, len(wav))
+        return wav
 
 
 class OllamaChat:
     def __init__(self, settings: Settings):
         self.settings = settings
 
+    @stage("Chat: knowledge -> Ollama")
     async def complete(self, messages: list[dict[str, str]], model: str | None = None) -> str:
         # This is intentionally the same policy as web-chat/server/app.js:
         # retain only recent conversation turns and enrich *only* the newest
         # user question. build_context reloads knowledge_rules.json and matching
         # Markdown files every call, so edits apply with no server restart.
         latest_question = messages[-1]["content"]
+        start = perf_counter()
+        log("Knowledge lookup | question=%d characters", len(latest_question))
         context = await asyncio.to_thread(build_context, latest_question)
+        log("Knowledge lookup | completed in %.2fs, prompt=%d characters", perf_counter() - start, len(context))
+        context = "Keep your answer concise, usually 1 to 3 short sentences. " + context
         enriched_messages = [
             *messages[:-1][-10:],
             {"role": "user", "content": context},
@@ -100,15 +112,21 @@ class OllamaChat:
             "model": model or self.settings.ollama_model,
             "messages": enriched_messages,
             "stream": False,
-            "options": {"temperature": 0.6, "num_ctx": 8192, "num_predict": 512},
+            "keep_alive": self.settings.ollama_keep_alive,
+            "options": {"temperature": 0.6, "num_ctx": self.settings.ollama_num_ctx, "num_predict": self.settings.ollama_num_predict},
         }
+        start = perf_counter()
+        log("Ollama | sending request model=%s, messages=%d", payload["model"], len(enriched_messages))
         timeout = httpx.Timeout(self.settings.ollama_timeout_seconds)
         async with httpx.AsyncClient(timeout=timeout) as client:
             response = await client.post(self.settings.ollama_url.rstrip("/") + "/api/chat", json=payload)
             response.raise_for_status()
-        answer = response.json().get("message", {}).get("content", "").strip()
+        metrics = response.json()
+        log("Ollama details | load=%.2fs, prompt processing=%.2fs, generation=%.2fs, tokens=%s", metrics.get("load_duration", 0) / 1e9, metrics.get("prompt_eval_duration", 0) / 1e9, metrics.get("eval_duration", 0) / 1e9, metrics.get("eval_count", 0))
+        answer = metrics.get("message", {}).get("content", "").strip()
         if not answer:
             raise ValueError("Ollama returned an empty answer")
+        log("Ollama | completed in %.2fs, answer=%d characters", perf_counter() - start, len(answer))
         return answer
 
 

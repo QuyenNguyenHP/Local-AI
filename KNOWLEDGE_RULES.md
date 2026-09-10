@@ -5,18 +5,18 @@
 Run the terminal client (Python 3.10 or newer, no extra packages required):
 
 ```bash
-cd "/home/dq/Local _Voice_Assistant/Local AI"
-python3 chat.py
+cd /home/daikai/Local-AI
+python3 voice_ai_server/chat.py
 ```
 
 It defaults to `gemma3:4b`. To use your custom model after creating it:
 
 ```bash
-python3 chat.py --model dq-assistant:latest
+python3 voice_ai_server/chat.py --model dq-assistant:latest
 ```
 
 Ollama must be running; the voice server does not need to be running. Type
-`/bye` to exit or `/clear` to reset chat history. The client reuses `knowledge.py`
+`/bye` to exit or `/clear` to reset chat history. The client reuses `voice_ai_server/app/knowledge.py`
 and rereads rules and selected notes for each question. It keeps the last five
 question/answer pairs in memory, without retaining full reference files.
 It uses temperature 0.6, context 8192, and an output limit of 512 tokens.
@@ -62,11 +62,11 @@ Restart your running voice server once to load the new Python code. For a server
 running in a terminal, stop it with Ctrl+C, then run:
 
 ```bash
-cd "/home/dq/Local _Voice_Assistant/voice_assisstant_server"
+cd /home/daikai/Local-AI/voice_ai_server
 set -a
 source .env
 set +a
-.venv/bin/python server.py
+../.venv/bin/python run.py
 ```
 
 After that, rules and Markdown contents are reread on every question. Editing
@@ -78,9 +78,9 @@ existing `OLLAMA_MODEL`; routing works with both the base and customized model.
 This command prints the selected reference text without calling Ollama:
 
 ```bash
-cd "/home/dq/Local _Voice_Assistant/voice_assisstant_server"
+cd /home/daikai/Local-AI/voice_ai_server
 python3 - <<'PY'
-from knowledge import matching_notes
+from app.knowledge import matching_notes
 print(matching_notes("How does my ESP32 connect to my server?") or "No matching files")
 PY
 ```

@@ -16,11 +16,16 @@ def _load_dotenv() -> None:
 
 @dataclass(frozen=True)
 class Settings:
+    warmup_on_start: bool = True
+    ollama_keep_alive: str = "30m"
     api_key: str = ""
     cors_origins: str = "*"
     whisper_model: str = "small"
     whisper_device: str = "auto"
     whisper_compute_type: str = "int8"
+    whisper_beam_size: int = 1
+    ollama_num_ctx: int = 4096
+    ollama_num_predict: int = 256
     ollama_url: str = "http://127.0.0.1:11434"
     # Match web-chat's default. Set OLLAMA_MODEL to override it per deployment.
     ollama_model: str = "dq-assistant:latest"
@@ -39,10 +44,15 @@ class Settings:
 def get_settings() -> Settings:
     _load_dotenv()
     return Settings(
+        warmup_on_start=os.getenv("WARMUP_ON_START", "1").lower() in {"1", "true", "yes"},
+        ollama_keep_alive=os.getenv("OLLAMA_KEEP_ALIVE", "30m"),
         api_key=os.getenv("API_KEY", ""), cors_origins=os.getenv("CORS_ORIGINS", "*"),
         whisper_model=os.getenv("WHISPER_MODEL", "small"), whisper_device=os.getenv("WHISPER_DEVICE", "auto"),
         whisper_compute_type=os.getenv("WHISPER_COMPUTE_TYPE", "int8"), ollama_url=os.getenv("OLLAMA_URL", "http://127.0.0.1:11434"),
         ollama_model=os.getenv("OLLAMA_MODEL", "dq-assistant:latest"), ollama_timeout_seconds=float(os.getenv("OLLAMA_TIMEOUT_SECONDS", "120")),
+        whisper_beam_size=int(os.getenv("WHISPER_BEAM_SIZE", "1")),
+        ollama_num_ctx=int(os.getenv("OLLAMA_NUM_CTX", "4096")),
+        ollama_num_predict=int(os.getenv("OLLAMA_NUM_PREDICT", "256")),
         kokoro_lang_code=os.getenv("KOKORO_LANG_CODE", "a"), kokoro_voice=os.getenv("KOKORO_VOICE", "af_heart"),
         max_audio_bytes=int(os.getenv("MAX_AUDIO_BYTES", str(25 * 1024 * 1024))), max_history_messages=int(os.getenv("MAX_HISTORY_MESSAGES", "12")),
     )

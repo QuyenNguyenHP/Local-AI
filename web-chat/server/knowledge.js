@@ -1,7 +1,7 @@
 import { execFile } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
-const bridge = fileURLToPath(new URL("./knowledge_bridge.py", import.meta.url));
+const bridge = fileURLToPath(new URL("../../voice_ai_server/knowledge_bridge.py", import.meta.url));
 export function buildKnowledgeContext(question) {
   return new Promise((resolve, reject) => {
     const child = execFile(
