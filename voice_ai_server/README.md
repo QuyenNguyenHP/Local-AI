@@ -3,7 +3,7 @@
 Shared voice API: **audio -> faster-whisper -> Ollama AI -> Kokoro -> WAV audio**.
 By default, models load and warm up before the server accepts requests. The first startup may need to download model files.
 
-For each question, `app/context.py` uses `build_context()` to reload `../knowledge_rules.json`, select matching Markdown files from `../knowledge/`, and send that context to Ollama. Web-chat shares this knowledge logic. The default model is `dq-assistant:latest`. Changes to knowledge files apply on the next request.
+For each question, `app/context.py` uses `build_context()` to reload `../knowledge_rules.json`, select matching Markdown files from `knowledge/`, and send that context to Ollama. Web-chat shares this knowledge logic. The default model is `dq-assistant:latest`. Changes to knowledge files apply on the next request.
 
 ## Source layout
 
@@ -22,9 +22,103 @@ voice_ai_server/
     └── config.py        # Server configuration
 ```
 
-Shared data lives in `../knowledge_rules.json` and `../knowledge/`.
+Rules live in `../knowledge_rules.json`; Markdown knowledge lives in `knowledge/`.
 Knowledge lookup follows `services.py -> context.build_context() -> knowledge.matching_notes()`.
 Web-chat calls `knowledge_bridge.py` to reuse this logic.
+
+## Semantic knowledge (Qdrant + Ollama embeddings)
+
+The default keyword lookup is simple but misses paraphrases and sends whole files to
+the model. The optional semantic RAG mode chunks every Markdown file, stores its
+embeddings in Qdrant, and retrieves only the most relevant chunks for each question.
+The voice API continues to work with the old keyword lookup until `RAG_ENABLED=1`.
+
+Run Qdrant locally (its ports are deliberately bound to localhost):
+
+```bash
+cd /home/daikai/Local-AI/voice_ai_server
+docker compose -f docker-compose.qdrant.yml up -d
+
+# Download the embedding model once. This must be the same model for indexing and queries.
+ollama pull embeddinggemma
+
+cd /home/daikai/Local-AI
+.venv/bin/python -m pip install -r voice_ai_server/requirements.txt
+.venv/bin/python voice_ai_server/index_knowledge.py
+```
+
+Then add the following to `voice_ai_server/.env` and restart the server:
+
+```dotenv
+RAG_ENABLED=1
+QDRANT_URL=http://127.0.0.1:6333
+QDRANT_COLLECTION=local_ai_knowledge
+OLLAMA_EMBED_MODEL=embeddinggemma
+RAG_TOP_K=5
+RAG_SCORE_THRESHOLD=0.35
+RAG_MAX_CHARS=9000
+```
+
+To update knowledge, edit or add files under `knowledge/`, then rerun
+`../.venv/bin/python index_knowledge.py` from this directory. The indexer rebuilds
+only `QDRANT_COLLECTION`, so removed Markdown files cannot leave stale chunks.
+Changing `OLLAMA_EMBED_MODEL` requires re-indexing. Keep Qdrant on localhost, or
+put it behind a private network plus its API key; it should not be exposed directly
+to the Internet. `knowledge_bridge.py` used by the existing web-chat remains on
+keyword lookup; point it at the voice API or add an equivalent retrieval client
+before enabling semantic RAG in that separate application.
+
+## Run the complete Voice AI server in Docker
+
+`docker-compose.qdrant.yml` manages both Qdrant and `voice-ai`. Ollama remains
+on the host, where it already manages its model and GPU; the container reaches it
+as `host.docker.internal`. Qdrant is private to the Docker network except for its
+localhost-only diagnostic port. The API remains available on port 8000.
+
+This deployment is configured for NVIDIA GPUs. Install and validate the NVIDIA
+Container Toolkit first; `docker run --rm --gpus all nvidia/cuda:12.8.1-base-ubuntu24.04 nvidia-smi`
+must work. For the initial startup, set `HF_HUB_OFFLINE=0` in `.env` so Whisper
+and Kokoro can populate Docker's named model-cache volume. You can set it back to
+`1` after a successful model warmup.
+
+Compose enables `RAG_ENABLED=1` by default and supplies the Qdrant address inside
+the Docker network. Add the other `RAG_*` values to `.env` only when you want to
+override their defaults.
+
+```bash
+cd /home/daikai/Local-AI/voice_ai_server
+
+# Build the Voice AI image and start both services.
+sudo docker compose -f docker-compose.qdrant.yml up -d --build
+
+# Wait for warmup, then inspect the API and its logs.
+curl http://127.0.0.1:8000/healthz
+sudo docker compose -f docker-compose.qdrant.yml logs -f voice-ai
+```
+
+The Compose file deliberately overrides `OLLAMA_URL` to the host gateway and
+`QDRANT_URL` to the internal Qdrant service; do not change those two values in
+`.env` for the container deployment. To index updated Markdown without installing
+anything on the host, run:
+
+```bash
+cd /home/daikai/Local-AI/voice_ai_server
+sudo docker compose -f docker-compose.qdrant.yml run --rm voice-ai python index_knowledge.py
+```
+
+Useful lifecycle commands:
+
+```bash
+sudo docker compose -f docker-compose.qdrant.yml ps
+sudo docker compose -f docker-compose.qdrant.yml restart voice-ai
+sudo docker compose -f docker-compose.qdrant.yml down       # keeps named volumes and Qdrant data
+```
+
+To update application code or dependencies, run `up -d --build` again. Editing
+files in `knowledge/` or `knowledge_rules.json` does not require rebuilding, but
+semantic RAG still requires rerunning the indexer. Do not use `down --volumes`
+unless you intentionally want to delete Qdrant vectors and the downloaded model
+cache.
 
 Run terminal chat from the project root with `python3 voice_ai_server/chat.py`.
 
@@ -115,13 +209,13 @@ When `API_KEY` is set, all endpoints except `GET /healthz` require:
 Authorization: Bearer <API_KEY>
 ```
 
-| Endpoint | Request body | Response body | Purpose |
-| --- | --- | --- | --- |
-| `GET /healthz` | None | JSON | HTTP server health |
-| `POST /v1/audio/transcriptions` | `multipart/form-data` | JSON | Audio to text |
-| `POST /v1/chat/completions` | `application/json` | JSON | Text to AI answer |
-| `POST /v1/audio/speech` | `application/json` | Binary `audio/wav` | Text to speech |
-| `POST /v1/voice/chat` | `multipart/form-data` | WAV or JSON | Complete voice assistant |
+| Endpoint                          | Request body            | Response body       | Purpose                  |
+| --------------------------------- | ----------------------- | ------------------- | ------------------------ |
+| `GET /healthz`                  | None                    | JSON                | HTTP server health       |
+| `POST /v1/audio/transcriptions` | `multipart/form-data` | JSON                | Audio to text            |
+| `POST /v1/chat/completions`     | `application/json`    | JSON                | Text to AI answer        |
+| `POST /v1/audio/speech`         | `application/json`    | Binary`audio/wav` | Text to speech           |
+| `POST /v1/voice/chat`           | `multipart/form-data` | WAV or JSON         | Complete voice assistant |
 
 For file uploads, browsers use `FormData`; ESP32 clients need a multipart HTTP library or a body with a boundary. The audio field is always named `audio`. Supported formats include WAV, MP3, M4A, WebM and formats supported by the audio backend. For ESP32, use mono PCM WAV, 16-bit, at 16 kHz or 24 kHz.
 
@@ -141,10 +235,10 @@ curl http://127.0.0.1:8000/healthz
 
 Input: `multipart/form-data`.
 
-| Field | Type | Required | Default | Description |
-| --- | --- | --- | --- | --- |
-| `audio` | Binary file | Yes | None | Audio file, limited by `MAX_AUDIO_BYTES` (25 MB by default). |
-| `language` | String | No | `null` | Whisper language code, such as `en` or `vi`. Omit for automatic detection. |
+| Field        | Type        | Required | Default  | Description                                                                   |
+| ------------ | ----------- | -------- | -------- | ----------------------------------------------------------------------------- |
+| `audio`    | Binary file | Yes      | None     | Audio file, limited by`MAX_AUDIO_BYTES` (25 MB by default).                 |
+| `language` | String      | No       | `null` | Whisper language code, such as`en` or `vi`. Omit for automatic detection. |
 
 ```bash
 curl -X POST http://127.0.0.1:8000/v1/audio/transcriptions \
@@ -162,12 +256,12 @@ JSON response:
 
 Input: `application/json`.
 
-| Field | Type | Required | Limit/default | Description |
-| --- | --- | --- | --- | --- |
-| `messages` | Object array | Yes | 1-30 items | Conversation messages, each with `role` and `content`. |
-| `messages[].role` | String | Yes | `system`, `user`, `assistant` | The last message should be the user question for knowledge lookup. |
-| `messages[].content` | String | Yes | None | Message text. |
-| `model` | String | No | `OLLAMA_MODEL` | Ollama model name, such as `dq-assistant:latest`. |
+| Field                  | Type         | Required | Limit/default                       | Description                                                        |
+| ---------------------- | ------------ | -------- | ----------------------------------- | ------------------------------------------------------------------ |
+| `messages`           | Object array | Yes      | 1-30 items                          | Conversation messages, each with`role` and `content`.          |
+| `messages[].role`    | String       | Yes      | `system`, `user`, `assistant` | The last message should be the user question for knowledge lookup. |
+| `messages[].content` | String       | Yes      | None                                | Message text.                                                      |
+| `model`              | String       | No       | `OLLAMA_MODEL`                    | Ollama model name, such as`dq-assistant:latest`.                 |
 
 ```bash
 curl -X POST http://127.0.0.1:8000/v1/chat/completions \
@@ -189,11 +283,11 @@ Before calling Ollama, the server selects knowledge for the last message and add
 
 Input: `application/json`.
 
-| Field | Type | Required | Default/limit | Description |
-| --- | --- | --- | --- | --- |
-| `text` | String | Yes | 1-10,000 characters | Text for Kokoro to speak. |
-| `voice` | String/null | No | `KOKORO_VOICE` (`af_heart`) | Voice supported by the loaded model. |
-| `speed` | Number | No | `1.0`, range `0.5` to `2.0` | Speech speed; lower is slower. This is not a model weight. |
+| Field     | Type        | Required | Default/limit                     | Description                                                |
+| --------- | ----------- | -------- | --------------------------------- | ---------------------------------------------------------- |
+| `text`  | String      | Yes      | 1-10,000 characters               | Text for Kokoro to speak.                                  |
+| `voice` | String/null | No       | `KOKORO_VOICE` (`af_heart`)   | Voice supported by the loaded model.                       |
+| `speed` | Number      | No       | `1.0`, range `0.5` to `2.0` | Speech speed; lower is slower. This is not a model weight. |
 
 ```bash
 curl -X POST http://127.0.0.1:8000/v1/audio/speech \
@@ -209,14 +303,14 @@ The response is binary `audio/wav`: 16-bit PCM WAV at 24 kHz. Use curl's `--outp
 Use this endpoint for a complete Web UI/ESP32 voice request.
 Input: `multipart/form-data`.
 
-| Field | Type | Required | Default | Description |
-| --- | --- | --- | --- | --- |
-| `audio` | Binary file | Yes | None | Recorded speech. |
-| `session_id` | String | No | `default` | Conversation ID. Use a separate ID per device to avoid mixing history. |
-| `language` | String/null | No | `null` | Whisper language code, or omit for automatic detection. |
-| `voice` | String/null | No | `KOKORO_VOICE` | Response voice. |
-| `model` | String/null | No | `OLLAMA_MODEL` | Model override for this request. |
-| `response_format` | String | No | `audio` | Either `audio` or `json`. |
+| Field               | Type        | Required | Default          | Description                                                            |
+| ------------------- | ----------- | -------- | ---------------- | ---------------------------------------------------------------------- |
+| `audio`           | Binary file | Yes      | None             | Recorded speech.                                                       |
+| `session_id`      | String      | No       | `default`      | Conversation ID. Use a separate ID per device to avoid mixing history. |
+| `language`        | String/null | No       | `null`         | Whisper language code, or omit for automatic detection.                |
+| `voice`           | String/null | No       | `KOKORO_VOICE` | Response voice.                                                        |
+| `model`           | String/null | No       | `OLLAMA_MODEL` | Model override for this request.                                       |
+| `response_format` | String      | No       | `audio`        | Either`audio` or `json`.                                           |
 
 Processing: `audio -> Whisper -> knowledge -> Ollama -> Kokoro -> response`.
 
@@ -264,34 +358,34 @@ curl -X POST http://192.168.1.10:8000/v1/voice/chat \
 
 Clients do not send model weights. The server loads faster-whisper weights for STT, the Ollama model for the LLM, and Kokoro weights for TTS. Clients send audio/text and request parameters.
 
-| `.env` variable | Type | Default | Effect |
-| --- | --- | --- | --- |
-| `WHISPER_MODEL` | String | `small` | Whisper model name or path. Larger models generally need more time and memory. |
-| `WHISPER_DEVICE` | String | `auto` | Whisper device, typically `cpu` or `cuda`. |
-| `WHISPER_COMPUTE_TYPE` | String | `int8` | Computation precision. Quantization can affect memory, speed and accuracy. |
-| `WHISPER_BEAM_SIZE` | Integer | `1` | Decoding search width. |
-| `OLLAMA_MODEL` | String | `dq-assistant:latest` | Default model; inspect installed models with `ollama list`. |
-| `OLLAMA_URL` | URL | `http://127.0.0.1:11434` | Ollama API address. |
-| `OLLAMA_TIMEOUT_SECONDS` | Number | `120` | Maximum wait for Ollama. |
-| `OLLAMA_NUM_CTX` | Integer | `4096` | Context window in tokens. |
-| `OLLAMA_NUM_PREDICT` | Integer | `256` | Maximum generated tokens. |
-| `OLLAMA_KEEP_ALIVE` | String | `30m` | Requested model retention time after a request. |
-| `KOKORO_LANG_CODE` | String | `a` | Kokoro pipeline language code. |
-| `KOKORO_VOICE` | String | `af_heart` | Default TTS voice. |
-| `MAX_AUDIO_BYTES` | Integer | `26214400` | Maximum upload size in bytes. |
-| `MAX_HISTORY_MESSAGES` | Integer | `12` | Messages retained in memory per session. |
-| `WARMUP_ON_START` | Boolean | `1` | Load and exercise models before serving requests. |
+| `.env` variable          | Type    | Default                    | Effect                                                                         |
+| -------------------------- | ------- | -------------------------- | ------------------------------------------------------------------------------ |
+| `WHISPER_MODEL`          | String  | `small`                  | Whisper model name or path. Larger models generally need more time and memory. |
+| `WHISPER_DEVICE`         | String  | `auto`                   | Whisper device, typically`cpu` or `cuda`.                                  |
+| `WHISPER_COMPUTE_TYPE`   | String  | `int8`                   | Computation precision. Quantization can affect memory, speed and accuracy.     |
+| `WHISPER_BEAM_SIZE`      | Integer | `1`                      | Decoding search width.                                                         |
+| `OLLAMA_MODEL`           | String  | `dq-assistant:latest`    | Default model; inspect installed models with`ollama list`.                   |
+| `OLLAMA_URL`             | URL     | `http://127.0.0.1:11434` | Ollama API address.                                                            |
+| `OLLAMA_TIMEOUT_SECONDS` | Number  | `120`                    | Maximum wait for Ollama.                                                       |
+| `OLLAMA_NUM_CTX`         | Integer | `4096`                   | Context window in tokens.                                                      |
+| `OLLAMA_NUM_PREDICT`     | Integer | `256`                    | Maximum generated tokens.                                                      |
+| `OLLAMA_KEEP_ALIVE`      | String  | `30m`                    | Requested model retention time after a request.                                |
+| `KOKORO_LANG_CODE`       | String  | `a`                      | Kokoro pipeline language code.                                                 |
+| `KOKORO_VOICE`           | String  | `af_heart`               | Default TTS voice.                                                             |
+| `MAX_AUDIO_BYTES`        | Integer | `26214400`               | Maximum upload size in bytes.                                                  |
+| `MAX_HISTORY_MESSAGES`   | Integer | `12`                     | Messages retained in memory per session.                                       |
+| `WARMUP_ON_START`        | Boolean | `1`                      | Load and exercise models before serving requests.                              |
 
 Ollama uses `temperature=0.6`; `num_predict` and `num_ctx` come from `.env`. These are inference settings, not model weights. Higher temperature increases output variation.
 
 ### Error codes
 
-| HTTP status | Typical cause |
-| --- | --- |
-| `401` | Missing or invalid bearer token when `API_KEY` is set. |
-| `413` | Empty audio or upload exceeding `MAX_AUDIO_BYTES`. |
-| `422` | Invalid request fields, unreadable audio, failed transcription on the transcription endpoint, or invalid response format. |
-| `503` | A handled Whisper, Kokoro or Ollama failure, including an unavailable Ollama service. |
+| HTTP status | Typical cause                                                                                                             |
+| ----------- | ------------------------------------------------------------------------------------------------------------------------- |
+| `401`     | Missing or invalid bearer token when`API_KEY` is set.                                                                   |
+| `413`     | Empty audio or upload exceeding`MAX_AUDIO_BYTES`.                                                                       |
+| `422`     | Invalid request fields, unreadable audio, failed transcription on the transcription endpoint, or invalid response format. |
+| `503`     | A handled Whisper, Kokoro or Ollama failure, including an unavailable Ollama service.                                     |
 
 ### Security and production
 

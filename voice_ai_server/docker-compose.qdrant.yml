@@ -1,0 +1,49 @@
+services:
+  qdrant:
+    image: qdrant/qdrant:v1.19.0
+    restart: unless-stopped
+    ports:
+      # Bind only to localhost; do not expose the vector database to the LAN.
+      - "127.0.0.1:6333:6333"
+      - "127.0.0.1:6334:6334"
+    volumes:
+      - qdrant_storage:/qdrant/storage
+
+  voice-ai:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      # Ollama stays on the host and is reached through Docker's host gateway.
+      OLLAMA_URL: http://host.docker.internal:11434
+      # Qdrant is intentionally private on the Compose network.
+      QDRANT_URL: http://qdrant:6333
+      # Enable semantic retrieval by default for this Compose deployment.
+      RAG_ENABLED: ${RAG_ENABLED:-1}
+      QDRANT_COLLECTION: ${QDRANT_COLLECTION:-local_ai_knowledge}
+      OLLAMA_EMBED_MODEL: ${OLLAMA_EMBED_MODEL:-embeddinggemma}
+      RAG_TOP_K: ${RAG_TOP_K:-5}
+      RAG_SCORE_THRESHOLD: ${RAG_SCORE_THRESHOLD:-0.35}
+      RAG_MAX_CHARS: ${RAG_MAX_CHARS:-9000}
+      HOST: 0.0.0.0
+      PORT: 8000
+    extra_hosts:
+      - host.docker.internal:host-gateway
+    ports:
+      - "8000:8000"
+    volumes:
+      # Markdown and rules can be edited without rebuilding the image.
+      - ./knowledge:/app/knowledge:ro
+      - ../knowledge_rules.json:/app/knowledge_rules.json:ro
+      - voice_ai_hf_cache:/root/.cache/huggingface
+    depends_on:
+      - qdrant
+    # Requires NVIDIA Container Toolkit on this GPU deployment.
+    gpus: all
+
+volumes:
+  qdrant_storage:
+  voice_ai_hf_cache:

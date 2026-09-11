@@ -30,6 +30,14 @@ class Settings:
     # Match web-chat's default. Set OLLAMA_MODEL to override it per deployment.
     ollama_model: str = "dq-assistant:latest"
     ollama_timeout_seconds: float = 120
+    rag_enabled: bool = False
+    qdrant_url: str = "http://127.0.0.1:6333"
+    qdrant_api_key: str = ""
+    qdrant_collection: str = "local_ai_knowledge"
+    ollama_embed_model: str = "embeddinggemma"
+    rag_top_k: int = 5
+    rag_score_threshold: float = 0.35
+    rag_max_chars: int = 9000
     kokoro_lang_code: str = "a"
     kokoro_voice: str = "af_heart"
     max_audio_bytes: int = 25 * 1024 * 1024
@@ -50,6 +58,12 @@ def get_settings() -> Settings:
         whisper_model=os.getenv("WHISPER_MODEL", "small"), whisper_device=os.getenv("WHISPER_DEVICE", "auto"),
         whisper_compute_type=os.getenv("WHISPER_COMPUTE_TYPE", "int8"), ollama_url=os.getenv("OLLAMA_URL", "http://127.0.0.1:11434"),
         ollama_model=os.getenv("OLLAMA_MODEL", "dq-assistant:latest"), ollama_timeout_seconds=float(os.getenv("OLLAMA_TIMEOUT_SECONDS", "120")),
+        rag_enabled=os.getenv("RAG_ENABLED", "0").lower() in {"1", "true", "yes"},
+        qdrant_url=os.getenv("QDRANT_URL", "http://127.0.0.1:6333"), qdrant_api_key=os.getenv("QDRANT_API_KEY", ""),
+        qdrant_collection=os.getenv("QDRANT_COLLECTION", "local_ai_knowledge"),
+        ollama_embed_model=os.getenv("OLLAMA_EMBED_MODEL", "embeddinggemma"),
+        rag_top_k=int(os.getenv("RAG_TOP_K", "5")), rag_score_threshold=float(os.getenv("RAG_SCORE_THRESHOLD", "0.35")),
+        rag_max_chars=int(os.getenv("RAG_MAX_CHARS", "9000")),
         whisper_beam_size=int(os.getenv("WHISPER_BEAM_SIZE", "1")),
         ollama_num_ctx=int(os.getenv("OLLAMA_NUM_CTX", "4096")),
         ollama_num_predict=int(os.getenv("OLLAMA_NUM_PREDICT", "256")),

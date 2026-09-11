@@ -31,7 +31,7 @@ by itself does not use these rules.
 ## Edit a rule
 
 Open [knowledge_rules.json](knowledge_rules.json). Each rule has a filename
-relative to `knowledge/` and a list of keywords. For example:
+relative to `voice_ai_server/knowledge/` and a list of keywords. For example:
 
 ```json
 {"file": "unitree_r1.md", "keywords": ["unitree", "r1", "my robot"]}

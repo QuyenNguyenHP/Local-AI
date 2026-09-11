@@ -7,11 +7,14 @@ from .progress import log
 
 
 DEFAULT_RULES = Path(__file__).resolve().parents[2] / "knowledge_rules.json"
+DEFAULT_KNOWLEDGE_ROOT = Path(__file__).resolve().parents[1] / "knowledge"
 
 
 def matching_notes(question: str, rules_path: Path = DEFAULT_RULES) -> str:
     rules = json.loads(rules_path.read_text(encoding="utf-8"))
-    root = (rules_path.parent / "knowledge").resolve()
+    # Rules remain at the repository root; the Markdown belongs to the voice
+    # server so it can be deployed as one self-contained application.
+    root = DEFAULT_KNOWLEDGE_ROOT.resolve()
     remaining = rules.get("max_chars", 12000)
     if not isinstance(remaining, int) or not 1 <= remaining <= 24000:
         raise ValueError("Knowledge max_chars must be between 1 and 24000")

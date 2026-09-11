@@ -66,7 +66,8 @@ Store your editable information separately from model behavior:
 Local AI/
 ├── Modelfile
 ├── DEPLOY_CUSTOM_AI.md
-└── knowledge/
+└── voice_ai_server/
+    └── knowledge/
     ├── about_me.md
     ├── company.md
     ├── drums.md
@@ -86,7 +87,7 @@ For example, edit your personal profile with:
 
 ```bash
 cd "/home/dq/Local _Voice_Assistant/Local AI"
-nano knowledge/about_me.md
+nano voice_ai_server/knowledge/about_me.md
 ```
 
 Keep general behavior in `Modelfile`, such as answering clearly and acknowledging
