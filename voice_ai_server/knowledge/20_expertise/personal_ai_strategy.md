@@ -1,4 +1,13 @@
-# General Notes
+---
+id: expertise.personal-ai-strategy
+type: expertise
+status: active
+updated: 2026-09-11
+confidence: confirmed
+tags: [local-ai, rag, knowledge-management]
+---
+
+# Personal AI Knowledge Strategy
 
 ## AI Knowledge Strategy
 For a local personal AI, separate information into four categories.

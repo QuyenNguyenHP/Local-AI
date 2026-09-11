@@ -5,6 +5,7 @@ from time import perf_counter
 
 import httpx
 from qdrant_client import QdrantClient
+from qdrant_client.models import FieldCondition, Filter, MatchValue
 
 from .config import Settings
 from .progress import log
@@ -44,6 +45,9 @@ class SemanticKnowledge:
             return self._qdrant().query_points(
                 collection_name=self.settings.qdrant_collection,
                 query=vector,
+                query_filter=Filter(
+                    must=[FieldCondition(key="status", match=MatchValue(value="active"))]
+                ),
                 limit=self.settings.rag_top_k,
                 score_threshold=self.settings.rag_score_threshold,
                 with_payload=True,
@@ -66,6 +70,16 @@ class SemanticKnowledge:
                 continue
             clipped = chunk[:remaining]
             remaining -= len(clipped)
-            excerpts.append(f"Source: {source} (similarity {point.score:.3f})\n{clipped}")
+            tags = payload.get("tags", [])
+            tags_text = ", ".join(tags) if isinstance(tags, list) else ""
+            metadata = (
+                f"Document: {payload.get('title', 'unknown')}\n"
+                f"Source: {source}\n"
+                f"Document ID: {payload.get('document_id', 'unknown')}\n"
+                f"Type: {payload.get('type', 'unknown')} | Status: {payload.get('status', 'unknown')} | "
+                f"Updated: {payload.get('updated', 'unknown')} | Confidence: {payload.get('confidence', 'unknown')}\n"
+                f"Tags: {tags_text} | Similarity: {point.score:.3f}"
+            )
+            excerpts.append(f"{metadata}\n{clipped}")
         log("RAG | model=%s hits=%d context=%d characters in %.2fs", self.settings.ollama_embed_model, len(excerpts), self.settings.rag_max_chars - remaining, perf_counter() - started)
         return "\n\n".join(excerpts)

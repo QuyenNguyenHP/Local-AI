@@ -1,4 +1,13 @@
-# About Me
+---
+id: person.mike.core-profile
+type: profile
+status: active
+updated: 2026-09-11
+confidence: confirmed
+tags: [mike, personal-profile]
+---
+
+# Mike - Core Profile
 
 ## Basic Profile
 - Preferred name: Mike
@@ -41,13 +50,6 @@ Mike works mainly in marine automation, embedded systems, Linux systems, remote 
 - AR / VR
 - Meta Quest 3
 - Blender and 3D workflows
-
-## Preferred Explanation Style
-- Practical first, theory second
-- Clear technical English
-- Concise but detailed enough to implement
-- Prefer architecture diagrams, topology diagrams, code examples, and step-by-step instructions
-- Avoid guessing when information is uncertain
 
 ## Frequently Used Hardware
 - RTX 3080 desktop PC

@@ -3,7 +3,7 @@
 Shared voice API: **audio -> faster-whisper -> Ollama AI -> Kokoro -> WAV audio**.
 By default, models load and warm up before the server accepts requests. The first startup may need to download model files.
 
-For each question, `app/context.py` uses `build_context()` to reload `../knowledge_rules.json`, select matching Markdown files from `knowledge/`, and send that context to Ollama. Web-chat shares this knowledge logic. The default model is `dq-assistant:latest`. Changes to knowledge files apply on the next request.
+For each question, the server embeds the latest user message, retrieves relevant Markdown chunks from Qdrant, and sends the attributed excerpts to Ollama. Semantic RAG is the only knowledge lookup mode. The default model is `dq-assistant:latest`.
 
 ## Source layout
 
@@ -12,26 +12,28 @@ voice_ai_server/
 ├── run.py               # Start the API and configure CUDA library paths
 ├── run_gpu.sh           # Optional GPU launcher; python run.py is sufficient
 ├── chat.py              # Terminal chat with Ollama
-├── knowledge_bridge.py  # JSON bridge for web-chat
+├── index_knowledge.py   # Build Qdrant from knowledge/**/*.md
+├── knowledge/           # Indexed personal knowledge by category
+├── knowledge_templates/ # Blank templates; not indexed
 └── app/
     ├── main.py          # API endpoints and startup warmup
     ├── services.py      # Whisper, Ollama, Kokoro and sessions
     ├── context.py       # Combine knowledge with the question
-    ├── knowledge.py     # Select Markdown files by keyword
+    ├── rag.py           # Embed questions and query Qdrant
     ├── progress.py      # Request IDs and processing logs
     └── config.py        # Server configuration
 ```
 
-Rules live in `../knowledge_rules.json`; Markdown knowledge lives in `knowledge/`.
-Knowledge lookup follows `services.py -> context.build_context() -> knowledge.matching_notes()`.
-Web-chat calls `knowledge_bridge.py` to reuse this logic.
+Markdown knowledge lives in `knowledge/`. Knowledge lookup follows
+`services.py -> context.build_context() -> rag.SemanticKnowledge.retrieve()`.
 
 ## Semantic knowledge (Qdrant + Ollama embeddings)
 
-The default keyword lookup is simple but misses paraphrases and sends whole files to
-the model. The optional semantic RAG mode chunks every Markdown file, stores its
-embeddings in Qdrant, and retrieves only the most relevant chunks for each question.
-The voice API continues to work with the old keyword lookup until `RAG_ENABLED=1`.
+The required semantic RAG pipeline chunks every Markdown file, stores its embeddings
+in Qdrant, and retrieves only the most relevant chunks for each question. The server
+fails clearly if Ollama embeddings or Qdrant are unavailable; there is no keyword fallback.
+YAML frontmatter is parsed into Qdrant payload metadata and copied into the embedding
+context for every chunk. Queries return only documents whose `status` is `active`.
 
 Run Qdrant locally (its ports are deliberately bound to localhost):
 
@@ -50,7 +52,6 @@ cd /home/daikai/Local-AI
 Then add the following to `voice_ai_server/.env` and restart the server:
 
 ```dotenv
-RAG_ENABLED=1
 QDRANT_URL=http://127.0.0.1:6333
 QDRANT_COLLECTION=local_ai_knowledge
 OLLAMA_EMBED_MODEL=embeddinggemma
@@ -64,9 +65,7 @@ To update knowledge, edit or add files under `knowledge/`, then rerun
 only `QDRANT_COLLECTION`, so removed Markdown files cannot leave stale chunks.
 Changing `OLLAMA_EMBED_MODEL` requires re-indexing. Keep Qdrant on localhost, or
 put it behind a private network plus its API key; it should not be exposed directly
-to the Internet. `knowledge_bridge.py` used by the existing web-chat remains on
-keyword lookup; point it at the voice API or add an equivalent retrieval client
-before enabling semantic RAG in that separate application.
+to the Internet. The web chat uses the same Ollama embedding and Qdrant endpoints.
 
 ## Run the complete Voice AI server in Docker
 
@@ -81,9 +80,8 @@ must work. For the initial startup, set `HF_HUB_OFFLINE=0` in `.env` so Whisper
 and Kokoro can populate Docker's named model-cache volume. You can set it back to
 `1` after a successful model warmup.
 
-Compose enables `RAG_ENABLED=1` by default and supplies the Qdrant address inside
-the Docker network. Add the other `RAG_*` values to `.env` only when you want to
-override their defaults.
+Compose supplies the Qdrant address inside the Docker network. Add `RAG_*` values
+to `.env` only when you want to override their defaults.
 
 ```bash
 cd /home/daikai/Local-AI/voice_ai_server
@@ -115,8 +113,8 @@ sudo docker compose -f docker-compose.qdrant.yml down       # keeps named volume
 ```
 
 To update application code or dependencies, run `up -d --build` again. Editing
-files in `knowledge/` or `knowledge_rules.json` does not require rebuilding, but
-semantic RAG still requires rerunning the indexer. Do not use `down --volumes`
+files in `knowledge/` does not require rebuilding, but it does require rerunning
+the indexer. Do not use `down --volumes`
 unless you intentionally want to delete Qdrant vectors and the downloaded model
 cache.
 
@@ -404,7 +402,7 @@ OLLAMA_NUM_PREDICT=256
 ```
 
 - Beam size `1` reduces decoding work compared with the former value `5`, with a possible accuracy tradeoff.
-- Context size `4096` reduces memory compared with `8192`, helping the model fit on the GPU. Long history and knowledge may exceed this budget; reduce history or `max_chars` in `knowledge_rules.json` if needed.
+- Context size `4096` reduces memory compared with `8192`, helping the model fit on the GPU. Long history and knowledge may exceed this budget; reduce history or `RAG_MAX_CHARS` if needed.
 - The output limit is reduced from `512` to `256` tokens. Long answers can be cut off at the limit.
 - The server requests concise answers, usually 1-3 sentences, to reduce Ollama and Kokoro processing time.
 

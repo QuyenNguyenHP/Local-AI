@@ -1,17 +1,19 @@
 #!/usr/bin/env python3
-"""Terminal chat with Ollama and the voice assistant's Markdown routing."""
+"""Terminal chat with Ollama and Qdrant semantic knowledge retrieval."""
 
 import argparse
+import asyncio
 import json
-import os
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
+from app.config import get_settings
 from app.context import build_context
+from app.rag import SemanticKnowledge
 
 
-def ask(question, history, model, url, on_chunk=None):
-    context = build_context(question)
+def ask(question, history, model, url, knowledge, on_chunk=None):
+    context = asyncio.run(build_context(question, knowledge))
     payload = {
         "model": model,
         "messages": [*history, {"role": "user", "content": context}],
@@ -54,13 +56,15 @@ def ask(question, history, model, url, on_chunk=None):
 
 
 def main():
+    settings = get_settings()
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--model", default=os.getenv("OLLAMA_MODEL", "gemma3:4b"))
-    parser.add_argument("--url", default=os.getenv("OLLAMA_URL", "http://127.0.0.1:11434"))
+    parser.add_argument("--model", default=settings.ollama_model)
+    parser.add_argument("--url", default=settings.ollama_url)
     args = parser.parse_args()
     history = []
+    knowledge = SemanticKnowledge(settings)
     print(f"Model: {args.model} | /bye: exit | /clear: clear history")
-    print("Rules and Markdown files are reloaded for each question.")
+    print("Knowledge is retrieved from the Qdrant semantic index.")
     while True:
         try:
             question = input("\nYou: ").strip()
@@ -75,7 +79,7 @@ def main():
             print("\nAI: ", end="", flush=True)
             try:
                 ask(
-                    question, history, args.model, args.url,
+                    question, history, args.model, args.url, knowledge,
                     on_chunk=lambda text: print(text, end="", flush=True),
                 )
             finally:
@@ -86,7 +90,7 @@ def main():
         except HTTPError as exc:
             print(f"Ollama HTTP error {exc.code}: {exc.read().decode('utf-8', errors='replace')}")
         except (URLError, TimeoutError, OSError, ValueError, KeyError, TypeError) as exc:
-            print(f"Error: {exc}. Check Ollama, the model, and knowledge_rules.json.")
+            print(f"Error: {exc}. Check Ollama, Qdrant, the embedding model, and the knowledge index.")
 
 
 if __name__ == "__main__":

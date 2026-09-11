@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 export function createApp({
   ollamaUrl = process.env.OLLAMA_URL || "http://127.0.0.1:11434",
   fetchImpl = fetch,
-  contextBuilder = buildKnowledgeContext,
+  contextBuilder,
 } = {}) {
   const app = express();
   app.use(express.json({ limit: "256kb" }));
@@ -57,7 +57,9 @@ export function createApp({
     }
     let context;
     try {
-      context = await contextBuilder(messages.at(-1).content);
+      context = contextBuilder
+        ? await contextBuilder(messages.at(-1).content)
+        : await buildKnowledgeContext(messages.at(-1).content, { fetchImpl, ollamaUrl });
     } catch (error) {
       return res.status(500).json({ error: error.message });
     }

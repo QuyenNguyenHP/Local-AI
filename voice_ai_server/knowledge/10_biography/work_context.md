@@ -1,4 +1,13 @@
-# Company Knowledge
+---
+id: person.mike.work-context
+type: biography
+status: active
+updated: 2026-09-11
+confidence: confirmed
+tags: [mike, career, daikai, marine-automation]
+---
+
+# Mike - Work Context
 
 ## Company
 Daikai Engineering Pte. Ltd.

@@ -1,54 +1,16 @@
-# Unitree R1 EDU Knowledge
+---
+id: project.unitree-r1.overview
+type: project
+status: active
+updated: 2026-09-11
+confidence: confirmed
+tags: [unitree-r1, robotics, ros2, dds]
+---
+
+# Unitree R1 EDU Project Overview
 
 ## Robot
 Model: Unitree R1 EDU
-
-## Development Computer
-Rear PC:
-- NVIDIA Jetson Orin Nano Dev Kit
-- ARMv8 CPU
-- 6 CPU cores
-- Ubuntu 20.04.5
-- Kernel 5.10.104-tegra
-- ROS 2 Foxy
-- CycloneDDS
-
-## Network
-Robot access point:
-- wlan1: 192.168.12.1
-
-Example Wi-Fi address:
-- 10.0.0.145
-
-Direct Ethernet example:
-- Robot rear PC: 192.168.123.164
-- Laptop: 192.168.123.11
-
-## Robot Software
-Communication uses DDS and ROS 2 related interfaces.
-
-Known service namespace:
-- /ros_bridge
-
-Known services:
-- /config
-- /loco
-- /motion_switcher
-- /robot_state
-- /voice
-
-Service type example:
-- unitree_api/srv/Generic
-
-Known topic example:
-- rt/api/gesture/request
-
-## Known FSM IDs
-- 0 = ZeroTorque
-- 4 = Stance
-- 701 = Lie2StandUp
-- 702 = StandUp2Lie
-- 811 = Start
 
 ## Existing Capabilities
 Mike has already achieved:

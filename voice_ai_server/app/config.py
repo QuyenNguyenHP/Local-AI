@@ -6,7 +6,8 @@ from pathlib import Path
 
 def _load_dotenv() -> None:
     """Small dependency-free .env reader; real environment variables win."""
-    for line in Path(".env").read_text(encoding="utf-8").splitlines() if Path(".env").exists() else []:
+    env_file = Path(__file__).resolve().parents[1] / ".env"
+    for line in env_file.read_text(encoding="utf-8").splitlines() if env_file.exists() else []:
         line = line.strip()
         if not line or line.startswith("#") or "=" not in line:
             continue
@@ -30,7 +31,6 @@ class Settings:
     # Match web-chat's default. Set OLLAMA_MODEL to override it per deployment.
     ollama_model: str = "dq-assistant:latest"
     ollama_timeout_seconds: float = 120
-    rag_enabled: bool = False
     qdrant_url: str = "http://127.0.0.1:6333"
     qdrant_api_key: str = ""
     qdrant_collection: str = "local_ai_knowledge"
@@ -58,7 +58,6 @@ def get_settings() -> Settings:
         whisper_model=os.getenv("WHISPER_MODEL", "small"), whisper_device=os.getenv("WHISPER_DEVICE", "auto"),
         whisper_compute_type=os.getenv("WHISPER_COMPUTE_TYPE", "int8"), ollama_url=os.getenv("OLLAMA_URL", "http://127.0.0.1:11434"),
         ollama_model=os.getenv("OLLAMA_MODEL", "dq-assistant:latest"), ollama_timeout_seconds=float(os.getenv("OLLAMA_TIMEOUT_SECONDS", "120")),
-        rag_enabled=os.getenv("RAG_ENABLED", "0").lower() in {"1", "true", "yes"},
         qdrant_url=os.getenv("QDRANT_URL", "http://127.0.0.1:6333"), qdrant_api_key=os.getenv("QDRANT_API_KEY", ""),
         qdrant_collection=os.getenv("QDRANT_COLLECTION", "local_ai_knowledge"),
         ollama_embed_model=os.getenv("OLLAMA_EMBED_MODEL", "embeddinggemma"),

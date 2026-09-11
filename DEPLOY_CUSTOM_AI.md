@@ -67,27 +67,29 @@ Local AI/
 ├── Modelfile
 ├── DEPLOY_CUSTOM_AI.md
 └── voice_ai_server/
-    └── knowledge/
-    ├── about_me.md
-    ├── company.md
-    ├── drums.md
-    ├── unitree_r1.md
-    ├── esp32_projects.md
-    ├── servers.md
-    └── notes.md
+    ├── knowledge/
+    │   ├── 00_identity/
+    │   ├── 10_biography/
+    │   ├── 20_expertise/
+    │   ├── 30_projects/
+    │   ├── 40_assets/
+    │   ├── 50_memory/
+    │   ├── 60_procedures/
+    │   └── 90_archive/
+    └── knowledge_templates/
 ```
 
-These files are provided alongside this guide. `about_me.md` contains Mike's
-supplied background and preferences. The other files provide sections to fill
-in; blank fields and comments are placeholders, not confirmed information.
-Add dates to information that changes and distinguish confirmed facts from
-plans or open questions.
+The indexed files are provided alongside this guide. Identity, biography,
+expertise, projects, assets, memory, procedures, and archived facts are kept
+separate. Blank templates live outside `knowledge/` so Qdrant never indexes
+placeholder content. Add dates to information that changes and distinguish
+confirmed facts from plans or open questions.
 
 For example, edit your personal profile with:
 
 ```bash
 cd "/home/dq/Local _Voice_Assistant/Local AI"
-nano voice_ai_server/knowledge/about_me.md
+nano voice_ai_server/knowledge/00_identity/core_profile.md
 ```
 
 Keep general behavior in `Modelfile`, such as answering clearly and acknowledging
@@ -95,11 +97,11 @@ uncertainty. Keep detailed personal and project facts in these topic files. The
 profile in the Modelfile example above can stay as a short baseline; if you later
 move it entirely into Markdown, first connect the files to the application.
 
-The voice server now loads matching files using [knowledge_rules.json](knowledge_rules.json).
-See [KNOWLEDGE_RULES.md](KNOWLEDGE_RULES.md) for editing rules, testing matches,
-and restarting the server to apply the integration. Ollama itself does not read
-the folder; the Python application adds the selected text to each request.
-Knowledge edits do not require rebuilding the model.
+The voice server uses semantic RAG only. See [KNOWLEDGE_RAG.md](KNOWLEDGE_RAG.md)
+for organizing documents, building the Qdrant index, and testing retrieval. Ollama
+itself does not read the folder; the application retrieves relevant indexed chunks
+for each request. Knowledge edits do not require rebuilding the chat model, but the
+Qdrant collection must be re-indexed.
 
 ## 3. Create and test your custom model
 
@@ -217,7 +219,7 @@ To return the voice application to the base model, set `OLLAMA_MODEL=gemma3:4b`,
 | Voice assistant uses the old personality | Check `.env` `SYSTEM_PROMPT`, reload the environment, and restart the voice server. |
 | Slow first reply | Your service was using CPU inference during the September 7, 2026 check. Initial model loading adds latency. If requests time out, increase `OLLAMA_TIMEOUT`; shorter output limits can reduce generation time. |
 | Replies stop too early | Increase `OLLAMA_NUM_PREDICT` in the voice server environment and restart it. For terminal use, increase the Modelfile value and rebuild. |
-| Model does not know your documents | Check knowledge_rules.json keywords and the matching Markdown file. Only files matching the current question are loaded. |
+| Model does not know your documents | Confirm Qdrant is running, the embedding model is installed, and rerun `voice_ai_server/index_knowledge.py`. |
 
 ## Deployment checklist
 

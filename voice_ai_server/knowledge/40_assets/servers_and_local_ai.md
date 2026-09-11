@@ -1,4 +1,13 @@
-# Servers and Local AI
+---
+id: assets.servers-and-local-ai
+type: asset-inventory
+status: active
+updated: 2026-09-11
+confidence: confirmed
+tags: [servers, hosting, local-ai, ollama]
+---
+
+# Servers and Local AI Assets
 
 ## Main Server / Hosting Environment
 
