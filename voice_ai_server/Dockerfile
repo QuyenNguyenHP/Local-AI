@@ -7,7 +7,7 @@ ENV DEBIAN_FRONTEND=noninteractive \
     PATH=/opt/venv/bin:$PATH
 
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends python3 python3-venv ffmpeg libsndfile1 ca-certificates \
+    && apt-get install -y --no-install-recommends python3 python3-venv ffmpeg libsndfile1 ca-certificates git \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app

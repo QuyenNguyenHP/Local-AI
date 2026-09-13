@@ -1,8 +1,7 @@
 #include <Arduino.h>
 #include <string.h>
 #include <WiFi.h>
-#include <esp_http_client.h>
-#include <esp_system.h>
+#include <HTTPClient.h>
 #include "ESP_I2S.h"
 #include "ESP_SR.h"  // Also links the ESP-SR component in Arduino builds.
 #include "esp_afe_config.h"
@@ -10,15 +9,28 @@
 #include "esp_afe_sr_models.h"
 #include "model_path.h"
 #include "esp_heap_caps.h"
-#include "config.h"
+#include "secrets.h"
+#include "status_display.h"
 
-#if !CONFIG_IDF_TARGET_ESP32S3
-#error Select an ESP32-S3 board.
-#endif
+// ESP32-S3-Touch-LCD-1.85C V1 digital microphone.
+constexpr int MIC_WS_PIN = 2;
+constexpr int MIC_BCLK_PIN = 15;
+constexpr int MIC_DATA_PIN = 39;
+
+// V1 PCM5101 speaker DAC.
+constexpr int SPEAKER_BCLK_PIN = 48;
+constexpr int SPEAKER_LRCK_PIN = 38;
+constexpr int SPEAKER_DATA_PIN = 47;
 
 constexpr uint32_t SAMPLE_RATE = 16000;
-constexpr unsigned RECORD_RATE = SAMPLE_RATE;
-constexpr char FIRMWARE_ID[] = "waveshare-local-ai-v1";
+constexpr char FIRMWARE_ID[] = "wake-record-voice-ai-v2";
+
+// Speaker playback volume: 100 = original, 50 = half, 200 = twice.
+// Values above 100 can clip loud recordings.
+constexpr uint16_t PLAYBACK_VOLUME_PERCENT = 200;
+
+// Set this to false if speaker_mic_test shows that the RIGHT level moves.
+constexpr bool MIC_IS_LEFT_CHANNEL = false;
 
 // Recording behavior. SILENCE_THRESHOLD is the average absolute 16-bit level.
 constexpr uint32_t MAX_RECORD_MS = 8000;
@@ -33,7 +45,11 @@ constexpr size_t MAX_RECORD_SAMPLES = (SAMPLE_RATE * MAX_RECORD_MS) / 1000;
 
 // The mic supplies a stereo I2S stream. WakeNet receives the selected mic slot
 // as M and ignores the other slot as N.
+#if 1
+// These macros must be compile-time strings/enum values for ESP_SR.begin().
+#define SR_INPUT_CHANNELS SR_CHANNELS_STEREO
 #define MIC_I2S_CHANNELS I2S_SLOT_MODE_STEREO
+#endif
 
 I2SClass micI2S;
 I2SClass speakerI2S;
@@ -42,9 +58,10 @@ int16_t *recording = nullptr;
 volatile bool recordRequested = false;
 volatile bool recognitionPaused = false;
 volatile bool feedTaskPaused = false;
-volatile bool detectTaskPaused = false;
 bool ready = false;
 bool conversationActive = false;
+char sessionId[32] = {};
+uint32_t conversationNumber = 0;
 
 srmodel_list_t *speechModels = nullptr;
 const esp_afe_sr_iface_t *afeHandle = nullptr;
@@ -75,7 +92,6 @@ void wakeNetFeedTask(void *parameter) {
   if (input == nullptr) {
     Serial.println("WakeNet feed buffer allocation failed.");
     vTaskDelete(nullptr);
-    return;
   }
 
   while (true) {
@@ -101,12 +117,10 @@ void wakeNetDetectTask(void *parameter) {
 
   while (true) {
     if (recognitionPaused) {
-      detectTaskPaused = true;
       vTaskDelay(pdMS_TO_TICKS(10));
       continue;
     }
 
-    detectTaskPaused = false;
     afe_fetch_result_t *result =
         afeHandle->fetch_with_delay(afeData, pdMS_TO_TICKS(100));
     if (result == nullptr || result->ret_value != ESP_OK) continue;
@@ -193,6 +207,21 @@ bool initializeMicrophone() {
   return true;
 }
 
+bool initializeSpeaker() {
+  speakerI2S.setPins(SPEAKER_BCLK_PIN, SPEAKER_LRCK_PIN,
+                     SPEAKER_DATA_PIN, -1, -1);
+  speakerI2S.setTimeout(1000);
+  if (!speakerI2S.begin(I2S_MODE_STD, SAMPLE_RATE,
+                        I2S_DATA_BIT_WIDTH_16BIT, I2S_SLOT_MODE_MONO,
+                        I2S_STD_SLOT_LEFT)) {
+    Serial.printf("Speaker initialization failed, error=%d\n",
+                  speakerI2S.lastError());
+    return false;
+  }
+
+  return true;
+}
+
 size_t recordUtterance(uint32_t waitForSpeechMs) {
   int16_t stereo[READ_FRAMES * 2];
   size_t storedSamples = 0;
@@ -202,14 +231,16 @@ size_t recordUtterance(uint32_t waitForSpeechMs) {
   const uint32_t recordStartMs = millis();
 
   Serial.println("Recording...");
+  statusDisplayShow("Listening", "Speak now");
 
   while (storedSamples < MAX_RECORD_SAMPLES) {
+    statusDisplayPoll();
     const size_t bytesRead = micI2S.readBytes(
         reinterpret_cast<char *>(stereo), sizeof(stereo));
     const size_t framesRead = bytesRead / (sizeof(int16_t) * 2);
     if (framesRead == 0) {
       Serial.printf("Microphone read failed, error=%d\n", micI2S.lastError());
-      return 0;
+      break;
     }
 
     uint32_t magnitudeTotal = 0;
@@ -240,12 +271,6 @@ size_t recordUtterance(uint32_t waitForSpeechMs) {
       lastLoudMs = now;
     }
 
-    // Keep only pre-roll while waiting, preserving the full recording budget.
-    const size_t preRoll = SAMPLE_RATE * PRE_ROLL_MS / 1000;
-    if (!speechStarted && storedSamples > preRoll) {
-      memmove(recording, recording + storedSamples - preRoll, preRoll * sizeof(int16_t));
-      storedSamples = preRoll;
-    }
     if (!speechStarted && now - recordStartMs >= waitForSpeechMs) {
       Serial.println("No speech heard.");
       return 0;
@@ -259,230 +284,263 @@ size_t recordUtterance(uint32_t waitForSpeechMs) {
 
   Serial.printf("Recorded %.2f seconds.\n",
                 static_cast<float>(storedSamples) / SAMPLE_RATE);
-  return speechStarted ? storedSamples : 0;
+  return storedSamples;
 }
 
-String sessionId;
-static const char BOUNDARY[] = "----ESP32S3VoiceBoundary9f32";
-static_assert(VOLUME_PERCENT >= 0 && VOLUME_PERCENT <= 100, "Invalid volume");
-
-
-// The HTTP client removes chunked transfer framing before calling this sink.
-struct Reply {
-  uint8_t *data = nullptr;
-  size_t size = 0;
-  size_t capacity = 0;
-  bool failed = false;
-};
-
-esp_err_t receiveHttp(esp_http_client_event_t *event) {
-  Reply *reply = static_cast<Reply *>(event->user_data);
-  if (event->event_id != HTTP_EVENT_ON_DATA || event->data_len <= 0) return ESP_OK;
-  size_t count = static_cast<size_t>(event->data_len);
-  if (reply->failed || count > MAX_REPLY_BYTES - reply->size) {
-    reply->failed = true;
-    return ESP_FAIL;
-  }
-  size_t needed = reply->size + count;
-  if (needed > reply->capacity) {
-    size_t capacity = (needed + 16383) & ~size_t(16383);
-    if (capacity > MAX_REPLY_BYTES) capacity = MAX_REPLY_BYTES;
-    void *next = heap_caps_realloc(reply->data, capacity, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-    if (!next) { reply->failed = true; return ESP_FAIL; }
-    reply->data = static_cast<uint8_t *>(next);
-    reply->capacity = capacity;
-  }
-  memcpy(reply->data + reply->size, event->data, count);
-  reply->size = needed;
-  return ESP_OK;
+uint16_t readLe16(const uint8_t *data) {
+  return data[0] | (static_cast<uint16_t>(data[1]) << 8);
 }
 
-void put16(uint8_t *p, uint16_t n) { p[0] = n; p[1] = n >> 8; }
-void put32(uint8_t *p, uint32_t n) { put16(p, n); put16(p + 2, n >> 16); }
-uint16_t get16(const uint8_t *p) { return uint16_t(p[0]) | (uint16_t(p[1]) << 8); }
-uint32_t get32(const uint8_t *p) { return uint32_t(get16(p)) | (uint32_t(get16(p + 2)) << 16); }
-
-void wavHeader(uint8_t *p, size_t bytes) {
-  memcpy(p, "RIFF", 4); put32(p + 4, bytes + 36);
-  memcpy(p + 8, "WAVEfmt ", 8); put32(p + 16, 16);
-  put16(p + 20, 1); put16(p + 22, 1);
-  put32(p + 24, RECORD_RATE); put32(p + 28, RECORD_RATE * 2);
-  put16(p + 32, 2); put16(p + 34, 16);
-  memcpy(p + 36, "data", 4); put32(p + 40, bytes);
+uint32_t readLe32(const uint8_t *data) {
+  return data[0] | (static_cast<uint32_t>(data[1]) << 8) |
+         (static_cast<uint32_t>(data[2]) << 16) |
+         (static_cast<uint32_t>(data[3]) << 24);
 }
 
-String field(const char *name, const String &value) {
-  return String("--") + BOUNDARY + "\r\nContent-Disposition: form-data; name=\"" +
-         name + "\"\r\n\r\n" + value + "\r\n";
+void writeLe16(uint8_t *data, uint16_t value) {
+  data[0] = value & 0xff;
+  data[1] = (value >> 8) & 0xff;
 }
 
-bool connectWifi() {
-  if (WiFi.status() == WL_CONNECTED) return true;
-  Serial.println("Connecting to Wi-Fi...");
-  WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
-  unsigned long started = millis();
-  while (WiFi.status() != WL_CONNECTED && millis() - started < 20000) delay(100);
-  if (WiFi.status() != WL_CONNECTED) {
-    Serial.println("Wi-Fi failed. Check config.h; check Wi-Fi and reset if startup failed.");
+void writeLe32(uint8_t *data, uint32_t value) {
+  data[0] = value & 0xff;
+  data[1] = (value >> 8) & 0xff;
+  data[2] = (value >> 16) & 0xff;
+  data[3] = (value >> 24) & 0xff;
+}
+
+// The Voice AI server expects a conventional mono, 16-bit PCM WAV upload.
+void writePcmWavHeader(uint8_t *header, uint32_t pcmBytes) {
+  memcpy(header, "RIFF", 4);
+  writeLe32(header + 4, 36 + pcmBytes);
+  memcpy(header + 8, "WAVEfmt ", 8);
+  writeLe32(header + 16, 16);
+  writeLe16(header + 20, 1);
+  writeLe16(header + 22, 1);
+  writeLe32(header + 24, SAMPLE_RATE);
+  writeLe32(header + 28, SAMPLE_RATE * sizeof(int16_t));
+  writeLe16(header + 32, sizeof(int16_t));
+  writeLe16(header + 34, 16);
+  memcpy(header + 36, "data", 4);
+  writeLe32(header + 40, pcmBytes);
+}
+
+bool playWav(HTTPClient &http) {
+  WiFiClient *stream = http.getStreamPtr();
+  uint8_t header[44];
+  if (stream->readBytes(header, sizeof(header)) != sizeof(header) ||
+      memcmp(header, "RIFF", 4) != 0 || memcmp(header + 8, "WAVE", 4) != 0 ||
+      memcmp(header + 36, "data", 4) != 0) {
+    Serial.println("Server returned an unsupported WAV file.");
     return false;
   }
-  Serial.print("IP: "); Serial.println(WiFi.localIP());
-  return true;
+
+  const uint16_t channels = readLe16(header + 22);
+  const uint32_t sampleRate = readLe32(header + 24);
+  const uint16_t bits = readLe16(header + 34);
+  uint32_t remaining = readLe32(header + 40);
+  if (channels != 1 || bits != 16 || sampleRate < 8000 || sampleRate > 48000) {
+    Serial.printf("Unsupported WAV: %u Hz, %u channels, %u bits.\n",
+                  sampleRate, channels, bits);
+    return false;
+  }
+
+  speakerI2S.end();
+  if (!speakerI2S.begin(I2S_MODE_STD, sampleRate, I2S_DATA_BIT_WIDTH_16BIT,
+                        I2S_SLOT_MODE_MONO, I2S_STD_SLOT_LEFT)) {
+    Serial.println("Could not configure speaker for response sample rate.");
+    return false;
+  }
+
+  Serial.printf("Playing AI response at %u Hz...\n", sampleRate);
+  statusDisplayShow("Answering", "Playing AI response");
+  uint8_t buffer[1024];
+  uint32_t played = 0;
+  while (remaining > 0) {
+    statusDisplayPoll();
+    const size_t wanted = min(static_cast<uint32_t>(sizeof(buffer)), remaining);
+    const size_t received = stream->readBytes(buffer, wanted);
+    if (received == 0) break;
+
+    if (PLAYBACK_VOLUME_PERCENT != 100) {
+      int16_t *samples = reinterpret_cast<int16_t *>(buffer);
+      for (size_t i = 0; i < received / 2; ++i) {
+        int32_t value = static_cast<int32_t>(samples[i]) *
+                        PLAYBACK_VOLUME_PERCENT / 100;
+        samples[i] = constrain(value, INT16_MIN, INT16_MAX);
+      }
+    }
+    played += speakerI2S.write(buffer, received);
+    remaining -= received;
+  }
+  Serial.printf("Playback finished (%u bytes).\n", played);
+  return remaining == 0;
 }
 
-bool playReply(const uint8_t *wav, size_t length) {
-  // Walk RIFF chunks instead of assuming every WAV has a 44-byte header.
-  if (length < 12 || memcmp(wav, "RIFF", 4) || memcmp(wav + 8, "WAVE", 4)) return false;
-  size_t end = size_t(get32(wav + 4)) + 8;
-  if (end < 12 || end > length) return false;
-  uint16_t format = 0, channels = 0, bits = 0, align = 0;
-  uint32_t rate = 0;
-  const uint8_t *pcm = nullptr;
-  size_t pcmBytes = 0;
-  for (size_t pos = 12; pos + 8 <= end;) {
-    uint32_t size = get32(wav + pos + 4);
-    const uint8_t *chunk = wav + pos;
-    pos += 8;
-    if (size > end - pos) return false;
-    if (!memcmp(chunk, "fmt ", 4) && size >= 16) {
-      format = get16(wav + pos); channels = get16(wav + pos + 2);
-      rate = get32(wav + pos + 4); align = get16(wav + pos + 12);
-      bits = get16(wav + pos + 14);
-    } else if (!memcmp(chunk, "data", 4)) {
-      pcm = wav + pos; pcmBytes = size;
-    }
-    pos += size;
-    if (size & 1) { if (pos == end) return false; ++pos; }
+// Called from loop only; keep the error visible before resuming WakeNet.
+void showAssistantError(const char *message, const char *detail) {
+  Serial.printf("Assistant error: %s (%s)\n", message, detail);
+  statusDisplayShow(message, detail);
+  const uint32_t started = millis();
+  while (millis() - started < 5000) {
+    statusDisplayPoll();
+    delay(10);
   }
-  if (!pcm || !pcmBytes || format != 1 || bits != 16 ||
-      (channels != 1 && channels != 2) || align != channels * 2 ||
-      pcmBytes % align || rate < 8000 || rate > 48000) return false;
-
-  speakerI2S.setPins(SPEAKER_BCLK_PIN, SPEAKER_LRCK_PIN, SPEAKER_DATA_PIN, -1);
-  if (!speakerI2S.begin(I2S_MODE_STD, rate, I2S_DATA_BIT_WIDTH_16BIT, I2S_SLOT_MODE_STEREO)) return false;
-  Serial.printf("Playing %u Hz reply...\n", unsigned(rate));
-  int16_t stereo[512];
-  bool ok = true;
-  for (size_t pos = 0; pos < pcmBytes && ok;) {
-    size_t frames = (pcmBytes - pos) / align;
-    if (frames > 256) frames = 256;
-    for (size_t i = 0; i < frames; ++i) {
-      int16_t left = static_cast<int16_t>(get16(pcm + pos));
-      int16_t right = channels == 2 ? static_cast<int16_t>(get16(pcm + pos + 2)) : left;
-      stereo[i * 2] = int32_t(left) * VOLUME_PERCENT / 100;
-      stereo[i * 2 + 1] = int32_t(right) * VOLUME_PERCENT / 100;
-      pos += align;
-    }
-    size_t bytes = frames * 4, sent = 0;
-    while (sent < bytes) {
-      size_t n = speakerI2S.write(reinterpret_cast<uint8_t *>(stereo) + sent, bytes - sent);
-      if (!n) { ok = false; break; }
-      sent += n;
-    }
-    delay(1);
-  }
-  // Feed silence to drain the queued final samples before deleting the channel.
-  memset(stereo, 0, sizeof(stereo));
-  for (int i = 0; i < 16 && ok; ++i) ok = speakerI2S.write(reinterpret_cast<uint8_t *>(stereo), sizeof(stereo)) == sizeof(stereo);
-  speakerI2S.end();
-  return ok;
 }
 
 bool askAssistant(size_t sampleCount) {
-  if (!connectWifi()) return false;
-  String prefix = field("session_id", sessionId) + field("response_format", "audio");
-  if (LANGUAGE[0]) prefix += field("language", LANGUAGE);
-  prefix += String("--") + BOUNDARY + "\r\nContent-Disposition: form-data; name=\"audio\"; filename=\"recording.wav\"\r\nContent-Type: audio/wav\r\n\r\n";
-  String suffix = String("\r\n--") + BOUNDARY + "--\r\n";
-  size_t pcmBytes = sampleCount * sizeof(int16_t);
-  size_t bodySize = prefix.length() + 44 + pcmBytes + suffix.length();
-  uint8_t *body = static_cast<uint8_t *>(heap_caps_malloc(bodySize, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
-  if (!body) { Serial.println("Not enough PSRAM for upload."); return false; }
-  memcpy(body, prefix.c_str(), prefix.length());
-  uint8_t *wav = body + prefix.length();
-  wavHeader(wav, pcmBytes);
-  memcpy(wav + 44, recording, pcmBytes);
-  memcpy(wav + 44 + pcmBytes, suffix.c_str(), suffix.length());
-  Serial.printf("Uploading %u bytes. Waiting for AI...\n", unsigned(pcmBytes));
-  Reply reply;
-  esp_http_client_config_t config = {};
-  config.url = SERVER_URL;
-  config.method = HTTP_METHOD_POST;
-  config.timeout_ms = HTTP_TIMEOUT_MS;
-  config.event_handler = receiveHttp;
-  config.user_data = &reply;
-  config.disable_auto_redirect = true;
-  esp_http_client_handle_t client = esp_http_client_init(&config);
-  if (!client) { Serial.println("HTTP initialization failed."); free(body); return false; }
-  String contentType = String("multipart/form-data; boundary=") + BOUNDARY;
-  String authorization = String("Bearer ") + API_KEY;
-  esp_http_client_set_header(client, "Content-Type", contentType.c_str());
-  esp_http_client_set_header(client, "Accept", "audio/wav");
-  if (API_KEY[0]) esp_http_client_set_header(client, "Authorization", authorization.c_str());
-  esp_http_client_set_post_field(client, reinterpret_cast<const char *>(body), bodySize);
-  esp_err_t result = esp_http_client_perform(client);
-  int status = esp_http_client_get_status_code(client);
-  bool complete = esp_http_client_is_complete_data_received(client);
-  esp_http_client_cleanup(client);
-  free(body);
-  bool played = false;
-  if (result != ESP_OK || reply.failed || !complete) {
-    Serial.printf("Transfer failed: %s; HTTP %d. Check server logs, timeout, and PSRAM/reply limit.\n", esp_err_to_name(result), status);
-  } else if (status != 200) {
-    Serial.printf("Server HTTP %d: ", status);
-    if (reply.data) Serial.write(reply.data, reply.size < 512 ? reply.size : 512);
-    Serial.println();
-  } else if (!(played = playReply(reply.data, reply.size))) {
-    Serial.println("Playback failed: expected PCM16 mono/stereo WAV, 8–48 kHz, or I2S output failed.");
+  if (WiFi.status() != WL_CONNECTED) {
+    showAssistantError("Wi-Fi disconnected", "Check Wi-Fi connection");
+    return false;
   }
-  free(reply.data);
+  statusDisplayShow("Thinking...", "Waiting for AI server");
+  // /v1/voice/chat accepts multipart/form-data. Keep the temporary request
+  // body in PSRAM, alongside rather than replacing the recording buffer.
+  constexpr char boundary[] = "----ESP32VoiceAI7MA4YWxkTrZu0gW";
+  const String audioPart = String("--") + boundary + "\r\n" +
+      "Content-Disposition: form-data; name=\"audio\"; filename=\"question.wav\"\r\n" +
+      "Content-Type: audio/wav\r\n\r\n";
+  const String sessionPart = String("\r\n--") + boundary + "\r\n" +
+      "Content-Disposition: form-data; name=\"session_id\"\r\n\r\n" +
+      sessionId + "\r\n--" + boundary + "--\r\n";
+  const size_t pcmBytes = sampleCount * sizeof(int16_t);
+  const size_t bodyBytes = audioPart.length() + 44 + pcmBytes + sessionPart.length();
+  uint8_t *body = static_cast<uint8_t *>(heap_caps_malloc(
+      bodyBytes, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
+  if (body == nullptr) {
+    Serial.println("Could not allocate the HTTP upload buffer in PSRAM.");
+    showAssistantError("Not enough memory", "Cannot send recording");
+    return false;
+  }
+
+  size_t offset = 0;
+  memcpy(body + offset, audioPart.c_str(), audioPart.length());
+  offset += audioPart.length();
+  writePcmWavHeader(body + offset, pcmBytes);
+  offset += 44;
+  memcpy(body + offset, recording, pcmBytes);
+  offset += pcmBytes;
+  memcpy(body + offset, sessionPart.c_str(), sessionPart.length());
+
+  HTTPClient http;
+  http.setConnectTimeout(5000);
+  http.setTimeout(180000);
+  if (!http.begin(VOICE_SERVER_URL)) {
+    heap_caps_free(body);
+    showAssistantError("API setup failed", "Check server URL");
+    return false;
+  }
+  http.addHeader("Content-Type", String("multipart/form-data; boundary=") + boundary);
+#ifdef VOICE_SERVER_API_KEY
+  if (strlen(VOICE_SERVER_API_KEY) > 0) {
+    http.addHeader("Authorization", String("Bearer ") + VOICE_SERVER_API_KEY);
+  }
+#endif
+
+  Serial.printf("Uploading %.2f seconds of WAV audio...\n",
+                static_cast<float>(sampleCount) / SAMPLE_RATE);
+  const int status = http.POST(body, bodyBytes);
+  heap_caps_free(body);
+  if (status != HTTP_CODE_OK) {
+    Serial.printf("Assistant request failed: HTTP %d\n", status);
+    http.end();
+    const String code = String("HTTP ") + status;
+    if (WiFi.status() != WL_CONNECTED) {
+      showAssistantError("Wi-Fi disconnected", "Check Wi-Fi connection");
+    } else if (status == HTTPC_ERROR_READ_TIMEOUT) {
+      showAssistantError("Server timeout", "Please try again later");
+    } else if (status < 0) {
+      showAssistantError("Cannot reach server", "Check server, IP and port");
+    } else if (status == 401 || status == 403) {
+      showAssistantError("Access denied", "Check API key");
+    } else if (status >= 500) {
+      showAssistantError("AI server error", code.c_str());
+    } else {
+      showAssistantError("Request failed", code.c_str());
+    }
+    return false;
+  }
+  const bool played = playWav(http);
+  http.end();
+  if (!played) {
+    showAssistantError("Audio response error", "Invalid WAV or playback failed");
+  }
   return played;
 }
+
+bool connectWiFi() {
+  WiFi.mode(WIFI_STA);
+  WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
+  Serial.printf("Connecting to Wi-Fi %s", WIFI_SSID);
+  const uint32_t started = millis();
+  while (WiFi.status() != WL_CONNECTED && millis() - started < 20000) {
+    delay(250);
+    Serial.print('.');
+  }
+  Serial.println();
+  if (WiFi.status() != WL_CONNECTED) return false;
+  Serial.printf("Wi-Fi connected: %s\n", WiFi.localIP().toString().c_str());
+  return true;
+}
+
 void setup() {
   Serial.begin(115200);
   delay(1500);
   Serial.printf("Starting %s (built %s %s)...\n", FIRMWARE_ID,
                 __DATE__, __TIME__);
+  statusDisplayInit();
 
   if (!psramFound()) {
     Serial.println("PSRAM is required. Enable it in Arduino Tools > PSRAM.");
+    statusDisplayShow("PSRAM required", "Enable OPI PSRAM");
     return;
   }
 
-  if (strncmp(SERVER_URL, "http://", 7)) {
-    Serial.println("Configure an http:// LAN server URL in config.h.");
-    return;
-  }
-  WiFi.mode(WIFI_STA);
-  WiFi.setSleep(false);
-  if (!connectWifi()) {
+  statusDisplayShow("Connecting Wi-Fi...", "Please wait");
+  if (!connectWiFi()) {
     Serial.println("Wi-Fi connection failed. Check secrets.h.");
+    statusDisplayShow("Wi-Fi failed", "Check secrets.h");
     return;
   }
 
   // Initialize only the microphone before the speech model.
-  if (!initializeMicrophone()) return;
+  if (!initializeMicrophone()) {
+    statusDisplayShow("Microphone init failed", "Check Serial Monitor");
+    return;
+  }
   printMemory("before WakeNet");
 
-  if (!initializeWakeNet()) return;
+  statusDisplayShow("Loading Hi ESP...", "Please wait");
+  if (!initializeWakeNet()) {
+    statusDisplayShow("WakeNet init failed", "Check model partition");
+    return;
+  }
 
   Serial.println("WakeNet initialized.");
   printMemory("after WakeNet");
+
+  if (!initializeSpeaker()) {
+    statusDisplayShow("Speaker init failed", "Check Serial Monitor");
+    return;
+  }
 
   recording = static_cast<int16_t *>(heap_caps_malloc(
       MAX_RECORD_SAMPLES * sizeof(int16_t), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
   if (recording == nullptr) {
     Serial.println("Could not allocate the recording buffer in PSRAM.");
+    statusDisplayShow("Not enough memory", "Recording buffer failed");
     return;
   }
   printMemory("after audio buffers");
 
   ready = true;
+  statusDisplayShow("Say: Hi ESP", "Ready");
   Serial.printf("Ready. Say 'Hi ESP' (using the %s microphone slot).\n",
                 MIC_IS_LEFT_CHANNEL ? "left" : "right");
 }
 
 void loop() {
+  statusDisplayPoll();
   if (!ready) {
     delay(1000);
     return;
@@ -494,20 +552,27 @@ void loop() {
   }
 
   recordRequested = false;
+  statusDisplayShow(conversationActive ? "Listening" : "ESP called",
+                    conversationActive ? "Ask another question" : "Hi ESP detected");
   const uint32_t pauseStart = millis();
-  while ((!feedTaskPaused || !detectTaskPaused) && millis() - pauseStart < 1500) {
+  while (!feedTaskPaused && millis() - pauseStart < 1500) {
     delay(5);
   }
-  if (!feedTaskPaused || !detectTaskPaused) {
+  if (!feedTaskPaused) {
     Serial.println("WakeNet feed task did not pause in time.");
+    statusDisplayShow("Microphone busy", "Try Hi ESP again");
     recognitionPaused = false;
     return;
   }
 
+  // The API scopes its conversation history by session_id. Start a fresh
+  // session on each wake-word conversation; retain it for follow-ups.
   if (!conversationActive) {
-    // The local server has no DELETE endpoint; a fresh ID starts fresh history.
-    sessionId = String("esp32s3-") + WiFi.macAddress() + "-" + String(esp_random(), HEX);
-    sessionId.replace(":", "");
+    const uint64_t mac = ESP.getEfuseMac();
+    snprintf(sessionId, sizeof(sessionId), "esp32-%04X%08X-%lu",
+             static_cast<uint16_t>(mac >> 32), static_cast<uint32_t>(mac),
+             static_cast<unsigned long>(++conversationNumber));
+    Serial.printf("Voice server session: %s\n", sessionId);
   }
   const size_t sampleCount = recordUtterance(
       conversationActive ? FOLLOW_UP_WAIT_MS : WAIT_FOR_SPEECH_MS);
@@ -519,18 +584,15 @@ void loop() {
 
   // Avoid the speaker echo immediately re-triggering WakeNet.
   delay(250);
-  // RX DMA kept running while the server/speaker were active. Discard queued
-  // samples and speaker echo before follow-up recording or WakeNet resumes.
-  int16_t discard[READ_FRAMES * 2];
-  for (int i = 0; i < 16; ++i) {
-    micI2S.readBytes(reinterpret_cast<char *>(discard), sizeof(discard));
-  }
   afeHandle->reset_buffer(afeData);
   if (conversationActive) {
+    statusDisplayShow("Listening", "Ask another question");
     Serial.println("Listening for a follow-up...");
     recordRequested = true;
   } else {
+    statusDisplayShow("Say: Hi ESP", "Ready");
     recognitionPaused = false;
     Serial.println("Ready. Say 'Hi ESP'.");
   }
 }
+ 

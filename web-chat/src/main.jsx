@@ -165,32 +165,9 @@ function App() {
         const data = await response.json();
         throw new Error(data.error || "Request failed");
       }
-      const reader = response.body.getReader(),
-        decoder = new TextDecoder();
-      let buffer = "",
-        done = false;
-      const consume = (line) => {
-        if (!line.trim()) return;
-        const data = JSON.parse(line);
-        if (data.error) throw new Error(data.error);
-        if (data.message?.content) {
-          answer += data.message.content;
-          updateMessage(id, answerId, answer);
-        }
-        if (data.done) done = true;
-      };
-      while (true) {
-        const part = await reader.read();
-        if (part.done) break;
-        buffer += decoder.decode(part.value, { stream: true });
-        const lines = buffer.split("\n");
-        buffer = lines.pop();
-        lines.forEach(consume);
-      }
-      buffer += decoder.decode();
-      if (buffer.trim()) consume(buffer);
-      if (!done)
-        throw new Error("The response ended unexpectedly. Please try again.");
+      const data = await response.json();
+      answer = data.choices?.[0]?.message?.content || "";
+      updateMessage(id, answerId, answer);
       if (!answer.trim())
         throw new Error(
           "The model returned an empty response. Please try again.",

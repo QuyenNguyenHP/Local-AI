@@ -1,6 +1,6 @@
 # DQ AI deployment: ai.dqtech.cloud
 
-This app runs as a Node service on `127.0.0.1:3001`. Apache handles the public hostname and forwards requests to it. Ollama remains local on `127.0.0.1:11434`, and semantic knowledge retrieval requires Qdrant on `127.0.0.1:6333`.
+This app runs as a Node service on `127.0.0.1:3001`. Apache handles the public hostname and forwards requests to it. Text chat is forwarded to Voice AI at `127.0.0.1:8000`; Voice AI owns Ollama, semantic retrieval and Qdrant.
 
 ## First deployment
 
@@ -63,4 +63,4 @@ sudo journalctl -u dq-ai -n 100 --no-pager
 sudo tail -f /var/log/apache2/ai.dqtech.cloud-error.log
 ```
 
-The app uses `OLLAMA_MODEL=dq-assistant:latest`, `OLLAMA_EMBED_MODEL=embeddinggemma`, and `QDRANT_COLLECTION=local_ai_knowledge` by default. Build the collection with `voice_ai_server/index_knowledge.py` after every knowledge change. Override these values in `/etc/systemd/system/dq-ai.service` when needed. Browser conversation history stays in each user's local browser. The demo login password is stored in the frontend source and is not a multi-user authentication system; add real server-side authentication before exposing this publicly.
+The app uses `OLLAMA_MODEL=dq-assistant:latest` for its model selector and sends requests to `VOICE_AI_URL=http://127.0.0.1:8000`. Build the collection with `voice_ai_server/index_knowledge.py` after every knowledge change. Configure `VOICE_AI_API_KEY` if Voice AI requires an API key. Browser conversation history stays in each user's local browser. The demo login password is stored in the frontend source and is not a multi-user authentication system; add real server-side authentication before exposing this publicly.

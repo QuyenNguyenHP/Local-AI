@@ -6,4 +6,6 @@ qdrant-client>=1.12,<2.0
 PyYAML>=6.0,<7.0
 faster-whisper>=1.1,<2.0
 kokoro>=0.9.4,<1.0
+# Vietnamese Kokoro runtime and Vietnamese G2P; used when TTS_LANGUAGE=vi.
+kokoro-vietnamese @ git+https://github.com/iamdinhthuan/Kokoro-Vietnamese.git
 soundfile>=0.12,<1.0

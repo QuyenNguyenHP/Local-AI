@@ -48,8 +48,9 @@ async def lifespan(app: FastAPI):
         start = perf_counter()
         log("Model warmup | warming up Kokoro, Whisper and Ollama before accepting requests")
         services = app.state.services
-        wav = await services["tts"].synthesize("Ready.")
-        await services["stt"].transcribe(wav, "en")
+        is_vietnamese_tts = settings.tts_language == "vi"
+        wav = await services["tts"].synthesize("Sẵn sàng." if is_vietnamese_tts else "Ready.")
+        await services["stt"].transcribe(wav, "vi" if is_vietnamese_tts else "en")
         await services["chat"].complete([{"role": "user", "content": "Reply with only the word Ready."}])
         log("Model warmup | ready after %.2fs", perf_counter() - start)
     yield

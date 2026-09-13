@@ -1,6 +1,10 @@
 # Voice AI Server
 
-Shared voice API: **audio -> faster-whisper -> Ollama AI -> Kokoro -> WAV audio**.
+Shared AI API with two request paths:
+
+- Text chat: **messages -> Qdrant RAG -> Ollama -> JSON text**
+- Voice chat: **audio -> faster-whisper -> Qdrant RAG -> Ollama -> Kokoro -> WAV audio**
+
 By default, models load and warm up before the server accepts requests. The first startup may need to download model files.
 
 For each question, the server embeds the latest user message, retrieves relevant Markdown chunks from Qdrant, and sends the attributed excerpts to Ollama. Semantic RAG is the only knowledge lookup mode. The default model is `dq-assistant:latest`.
@@ -65,7 +69,8 @@ To update knowledge, edit or add files under `knowledge/`, then rerun
 only `QDRANT_COLLECTION`, so removed Markdown files cannot leave stale chunks.
 Changing `OLLAMA_EMBED_MODEL` requires re-indexing. Keep Qdrant on localhost, or
 put it behind a private network plus its API key; it should not be exposed directly
-to the Internet. The web chat uses the same Ollama embedding and Qdrant endpoints.
+to the Internet. `web-chat` sends its requests to this API's text-chat endpoint;
+this server is the single owner of Ollama embedding and Qdrant retrieval.
 
 ## Run the complete Voice AI server in Docker
 
@@ -190,8 +195,10 @@ Ollama manages its GPU separately. Git ignores the libraries inside `.venv/`.
 
 ## Processing logs
 
-Running `python run.py` displays INFO logs for each stage:
-audio received -> Whisper -> conversation history -> knowledge lookup -> Ollama -> Kokoro -> HTTP response.
+Running `python run.py` displays INFO logs for each stage. A voice request logs:
+`audio received -> Whisper -> conversation history -> knowledge lookup -> Ollama -> Kokoro -> HTTP response`.
+Text-chat requests log only knowledge lookup and Ollama; they do not invoke Whisper
+or Kokoro.
 Each request has an ID such as `[a1b2c3d4]` to distinguish concurrent requests.
 Logs include elapsed time, model names, selected Markdown files, character counts and WAV size.
 Initial model loading is logged separately; stage duration includes model loading when needed.
@@ -211,7 +218,7 @@ Authorization: Bearer <API_KEY>
 | --------------------------------- | ----------------------- | ------------------- | ------------------------ |
 | `GET /healthz`                  | None                    | JSON                | HTTP server health       |
 | `POST /v1/audio/transcriptions` | `multipart/form-data` | JSON                | Audio to text            |
-| `POST /v1/chat/completions`     | `application/json`    | JSON                | Text to AI answer        |
+| `POST /v1/chat/completions`     | `application/json`    | JSON                | Text-only AI answer      |
 | `POST /v1/audio/speech`         | `application/json`    | Binary`audio/wav` | Text to speech           |
 | `POST /v1/voice/chat`           | `multipart/form-data` | WAV or JSON         | Complete voice assistant |
 
@@ -250,7 +257,7 @@ JSON response:
 { "text": "How are you?", "language": "en" }
 ```
 
-### `POST /v1/chat/completions` - AI text and knowledge
+### `POST /v1/chat/completions` - Text-only AI chat and knowledge
 
 Input: `application/json`.
 
@@ -275,7 +282,7 @@ curl -X POST http://127.0.0.1:8000/v1/chat/completions \
 }
 ```
 
-Before calling Ollama, the server selects knowledge for the last message and adds it to the prompt. Reference notes are not stored in conversation history, to avoid repeatedly expanding the prompt.
+Before calling Ollama, the server selects knowledge for the last message and adds it to the prompt. Reference notes are not stored in conversation history, to avoid repeatedly expanding the prompt. This endpoint does **not** load or invoke Whisper STT or Kokoro TTS for the request. `web-chat` uses this endpoint at `http://127.0.0.1:8000` by default.
 
 ### `POST /v1/audio/speech` - Text to speech
 
@@ -298,7 +305,7 @@ The response is binary `audio/wav`: 16-bit PCM WAV at 24 kHz. Use curl's `--outp
 
 ### `POST /v1/voice/chat` - Complete pipeline
 
-Use this endpoint for a complete Web UI/ESP32 voice request.
+Use this endpoint for a complete audio-client/ESP32 voice request.
 Input: `multipart/form-data`.
 
 | Field               | Type        | Required | Default          | Description                                                            |
@@ -354,7 +361,7 @@ curl -X POST http://192.168.1.10:8000/v1/voice/chat \
 
 ### Model weights and configuration
 
-Clients do not send model weights. The server loads faster-whisper weights for STT, the Ollama model for the LLM, and Kokoro weights for TTS. Clients send audio/text and request parameters.
+Clients do not send model weights. The server loads faster-whisper weights only for STT requests, the Ollama model for chat, and Kokoro weights only for TTS/voice requests. Clients send audio/text and request parameters.
 
 | `.env` variable          | Type    | Default                    | Effect                                                                         |
 | -------------------------- | ------- | -------------------------- | ------------------------------------------------------------------------------ |
@@ -370,11 +377,32 @@ Clients do not send model weights. The server loads faster-whisper weights for S
 | `OLLAMA_KEEP_ALIVE`      | String  | `30m`                    | Requested model retention time after a request.                                |
 | `KOKORO_LANG_CODE`       | String  | `a`                      | Kokoro pipeline language code.                                                 |
 | `KOKORO_VOICE`           | String  | `af_heart`               | Default TTS voice.                                                             |
+| `TTS_LANGUAGE`           | String  | `en`                     | TTS backend:`en` for Kokoro-82M, or `vi` for Kokoro-Vietnamese.            |
+| `KOKORO_VI_DEVICE`       | String  | `auto`                   | Vietnamese backend device:`auto`, `cpu`, or `cuda`.                      |
 | `MAX_AUDIO_BYTES`        | Integer | `26214400`               | Maximum upload size in bytes.                                                  |
 | `MAX_HISTORY_MESSAGES`   | Integer | `12`                     | Messages retained in memory per session.                                       |
 | `WARMUP_ON_START`        | Boolean | `1`                      | Load and exercise models before serving requests.                              |
 
 Ollama uses `temperature=0.6`; `num_predict` and `num_ctx` come from `.env`. These are inference settings, not model weights. Higher temperature increases output variation.
+
+### Vietnamese TTS
+
+The server chooses one TTS backend at startup. To use the Vietnamese Kokoro
+checkpoint, rebuild/install dependencies and set the following before starting
+the server:
+
+```env
+TTS_LANGUAGE=vi
+KOKORO_VOICE=diem_trinh
+KOKORO_VI_DEVICE=auto
+```
+
+Available Vietnamese voices include `diem_trinh`, `hung_thinh`, `mai_linh`,
+`mai_loan`, `manh_dung`, `my_yen`, `ngoc_huyen`, `phat_tai`, `thanh_dat`,
+`thuc_trinh`, `tuan_ngoc`, `storyvert`, `duc_an`, and `duc_duy`. The Vietnamese
+model downloads its checkpoint and selected voicepack from Hugging Face on its
+first use. Its current runtime does not expose the API's `speed` control;
+`speed` is ignored for Vietnamese synthesis.
 
 ### Error codes
 
@@ -383,7 +411,7 @@ Ollama uses `temperature=0.6`; `num_predict` and `num_ctx` come from `.env`. The
 | `401`     | Missing or invalid bearer token when`API_KEY` is set.                                                                   |
 | `413`     | Empty audio or upload exceeding`MAX_AUDIO_BYTES`.                                                                       |
 | `422`     | Invalid request fields, unreadable audio, failed transcription on the transcription endpoint, or invalid response format. |
-| `503`     | A handled Whisper, Kokoro or Ollama failure, including an unavailable Ollama service.                                     |
+| `503`     | A handled Whisper, Kokoro, Ollama or Qdrant/RAG failure, including an unavailable upstream service.                       |
 
 ### Security and production
 
@@ -408,7 +436,7 @@ OLLAMA_NUM_PREDICT=256
 
 Restart with `python run.py` after changing settings. After a request, inspect the `PROCESSOR` column in `ollama ps`. The target is `100% GPU`, but placement depends on model size and available VRAM. Compare stage timings using the same question; model loading can affect the first request when warmup is disabled.
 
-The model selection is unchanged. The API still waits for the full answer and WAV; audio streaming is not implemented. These settings apply to the voice server, including its text chat API. Terminal chat and web-chat retain their own inference settings.
+The API waits for the complete answer. Voice endpoints additionally wait for the complete WAV; audio streaming is not implemented. `web-chat` calls this server's text-chat API, so RAG and inference settings are owned by this server.
 
 ## Startup warmup and warning handling
 

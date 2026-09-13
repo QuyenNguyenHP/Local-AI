@@ -58,13 +58,28 @@ class TextToSpeech:
     async def _get_pipeline(self):
         async with self._lock:
             if self._pipeline is None:
-                log("Loading Kokoro model | language=%s", self.settings.kokoro_lang_code)
-                import warnings
-                # Known upstream warnings only; retain other warnings and errors.
-                warnings.filterwarnings("ignore", message="dropout option adds dropout after all but last recurrent layer.*", category=UserWarning, module=r"torch\.nn\.modules\.rnn")
-                warnings.filterwarnings("ignore", message=r"`torch\.nn\.utils\.weight_norm` is deprecated.*", category=FutureWarning, module=r"torch\.nn\.utils\.weight_norm")
-                from kokoro import KPipeline
-                self._pipeline = await asyncio.to_thread(KPipeline, lang_code=self.settings.kokoro_lang_code, repo_id="hexgrad/Kokoro-82M")
+                if self.settings.tts_language == "vi":
+                    device = self.settings.kokoro_vi_device
+                    if device == "auto":
+                        import torch
+                        device = "cuda" if torch.cuda.is_available() else "cpu"
+                    if device not in {"cpu", "cuda"}:
+                        raise ValueError("KOKORO_VI_DEVICE must be auto, cpu, or cuda")
+                    log("Loading Kokoro Vietnamese model | device=%s", device)
+                    from kokoro_vietnamese import KokoroVietnamese
+                    self._pipeline = await asyncio.to_thread(
+                        KokoroVietnamese, device=device, voice=self.settings.kokoro_voice
+                    )
+                elif self.settings.tts_language == "en":
+                    log("Loading Kokoro English model | language=%s", self.settings.kokoro_lang_code)
+                    import warnings
+                    # Known upstream warnings only; retain other warnings and errors.
+                    warnings.filterwarnings("ignore", message="dropout option adds dropout after all but last recurrent layer.*", category=UserWarning, module=r"torch\.nn\.modules\.rnn")
+                    warnings.filterwarnings("ignore", message=r"`torch\.nn\.utils\.weight_norm` is deprecated.*", category=FutureWarning, module=r"torch\.nn\.utils\.weight_norm")
+                    from kokoro import KPipeline
+                    self._pipeline = await asyncio.to_thread(KPipeline, lang_code=self.settings.kokoro_lang_code, repo_id="hexgrad/Kokoro-82M")
+                else:
+                    raise ValueError("TTS_LANGUAGE must be en or vi")
             return self._pipeline
 
     @stage("Kokoro: text -> audio")
@@ -75,6 +90,17 @@ class TextToSpeech:
         def run():
             import numpy as np
             import soundfile as sf
+            if self.settings.tts_language == "vi":
+                # The Vietnamese package has a different inference API and does
+                # not expose Kokoro's speed parameter.
+                if voice and voice != self.settings.kokoro_voice:
+                    raise ValueError("Vietnamese voice is selected by KOKORO_VOICE; restart after changing it")
+                if speed != 1.0:
+                    log("Kokoro Vietnamese | speed=%s ignored by this backend", speed)
+                audio, _phonemes = pipeline.synthesize(text)
+                output = io.BytesIO()
+                sf.write(output, audio, 24000, format="WAV", subtype="PCM_16")
+                return output.getvalue()
             pieces = []
             for _, _, audio in pipeline(text, voice=selected_voice, speed=speed):
                 pieces.append(audio)

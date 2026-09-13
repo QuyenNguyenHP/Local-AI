@@ -38,8 +38,11 @@ class Settings:
     rag_top_k: int = 5
     rag_score_threshold: float = 0.35
     rag_max_chars: int = 9000
+    # Select the TTS implementation at server startup: "en" or "vi".
+    tts_language: str = "en"
     kokoro_lang_code: str = "a"
     kokoro_voice: str = "af_heart"
+    kokoro_vi_device: str = "auto"
     max_audio_bytes: int = 25 * 1024 * 1024
     max_history_messages: int = 12
 
@@ -66,6 +69,8 @@ def get_settings() -> Settings:
         whisper_beam_size=int(os.getenv("WHISPER_BEAM_SIZE", "1")),
         ollama_num_ctx=int(os.getenv("OLLAMA_NUM_CTX", "4096")),
         ollama_num_predict=int(os.getenv("OLLAMA_NUM_PREDICT", "256")),
+        tts_language=os.getenv("TTS_LANGUAGE", "en").lower(),
         kokoro_lang_code=os.getenv("KOKORO_LANG_CODE", "a"), kokoro_voice=os.getenv("KOKORO_VOICE", "af_heart"),
+        kokoro_vi_device=os.getenv("KOKORO_VI_DEVICE", "auto").lower(),
         max_audio_bytes=int(os.getenv("MAX_AUDIO_BYTES", str(25 * 1024 * 1024))), max_history_messages=int(os.getenv("MAX_HISTORY_MESSAGES", "12")),
     )
