@@ -52,6 +52,12 @@ export function MessageList({ messages, bottomRef, copied, onCopy }) {
             </div>
           )}
           <div className="message-content">
+            {message.imagePreview && (
+              <img className="message-image" src={message.imagePreview} alt={message.imageName || "Uploaded image"} />
+            )}
+            {message.imageName && !message.imagePreview && (
+              <p className="image-attachment">Image: {message.imageName}</p>
+            )}
             {message.content ? (
               <ReactMarkdown remarkPlugins={[remarkGfm]}>
                 {message.content}

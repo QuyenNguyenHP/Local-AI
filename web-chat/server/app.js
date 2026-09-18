@@ -95,6 +95,53 @@ export function createApp({
       clearTimeout(timeout);
     }
   });
+  app.post(
+    "/api/images/chat",
+    express.raw({ type: "multipart/form-data", limit: "11mb" }),
+    async (req, res) => {
+      if (!Buffer.isBuffer(req.body) || !req.body.length) {
+        return res.status(400).json({ error: "Provide an image and prompt as multipart form data." });
+      }
+      const contentType = req.headers["content-type"];
+      if (typeof contentType !== "string" || !contentType.startsWith("multipart/form-data;")) {
+        return res.status(400).json({ error: "Image requests must use multipart form data." });
+      }
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 180000);
+      res.on("close", () => controller.abort());
+      try {
+        const headers = { "Content-Type": contentType };
+        if (voiceAiApiKey) headers.Authorization = `Bearer ${voiceAiApiKey}`;
+        const upstream = await fetchImpl(
+          `${voiceAiUrl.replace(/\/$/, "")}/v1/images/chat`,
+          { method: "POST", headers, body: req.body, signal: controller.signal },
+        );
+        const raw = await upstream.text();
+        let data = {};
+        try {
+          data = raw ? JSON.parse(raw) : {};
+        } catch {
+          // Keep a non-JSON upstream error from becoming a blank browser error.
+        }
+        if (!upstream.ok) {
+          return res.status(upstream.status).json({
+            error: data.detail || data.error || raw || "Voice AI image request failed.",
+          });
+        }
+        const answer = data.choices?.[0]?.message?.content;
+        if (typeof answer !== "string" || !answer.trim()) {
+          return res.status(502).json({ error: "Voice AI returned an empty image response." });
+        }
+        res.json({ choices: [{ message: { role: "assistant", content: answer } }] });
+      } catch {
+        if (!res.destroyed) {
+          res.status(503).json({ error: "Cannot connect to Voice AI. Start voice_ai_server and try again." });
+        }
+      } finally {
+        clearTimeout(timeout);
+      }
+    },
+  );
   app.use("/api", (_req, res) =>
     res.status(404).json({ error: "API route not found" }),
   );

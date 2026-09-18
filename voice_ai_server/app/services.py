@@ -1,7 +1,9 @@
 import asyncio
+import base64
 import io
 import json
 from collections import defaultdict
+from typing import Any
 
 import httpx
 
@@ -10,6 +12,7 @@ from .config import Settings
 from .context import build_context
 from .rag import SemanticKnowledge
 from .progress import log, stage
+from .tools.registry import ToolRegistry
 from time import perf_counter
 
 
@@ -119,9 +122,10 @@ class OllamaChat:
     def __init__(self, settings: Settings):
         self.settings = settings
         self.rag = SemanticKnowledge(settings)
+        self.tools = ToolRegistry(settings)
 
     @stage("Chat: knowledge -> Ollama")
-    async def complete(self, messages: list[dict[str, str]], model: str | None = None) -> str:
+    async def complete(self, messages: list[dict[str, Any]], model: str | None = None, allow_tools: bool = True) -> str:
         # Retain only recent conversation turns and enrich only the newest user
         # question with excerpts retrieved from the semantic knowledge index.
         latest_question = messages[-1]["content"]
@@ -130,9 +134,15 @@ class OllamaChat:
         context = await build_context(latest_question, self.rag)
         log("Knowledge lookup | completed in %.2fs, prompt=%d characters", perf_counter() - start, len(context))
         context = "Keep your answer concise, usually 1 to 3 short sentences. " + context
+        latest_message: dict[str, Any] = {"role": "user", "content": context}
+        image = messages[-1].get("image")
+        if isinstance(image, bytes):
+            # Ollama's native chat API expects bare Base64 image data, not a
+            # data URL. Images are accepted only from the image endpoint.
+            latest_message["images"] = [base64.b64encode(image).decode("ascii")]
         enriched_messages = [
             *messages[:-1][-10:],
-            {"role": "user", "content": context},
+            latest_message,
         ]
         payload = {
             "model": model or self.settings.ollama_model,
@@ -144,6 +154,9 @@ class OllamaChat:
             "keep_alive": self.settings.ollama_keep_alive,
             "options": {"temperature": 0.6, "num_ctx": self.settings.ollama_num_ctx, "num_predict": self.settings.ollama_num_predict},
         }
+        tool_definitions = self.tools.definitions() if allow_tools else []
+        if tool_definitions:
+            payload["tools"] = tool_definitions
         start = perf_counter()
         log("Ollama | sending request model=%s, messages=%d", payload["model"], len(enriched_messages))
         timeout = httpx.Timeout(self.settings.ollama_timeout_seconds)
@@ -152,6 +165,27 @@ class OllamaChat:
             response.raise_for_status()
         metrics = response.json()
         log("Ollama details | load=%.2fs, prompt processing=%.2fs, generation=%.2fs, tokens=%s", metrics.get("load_duration", 0) / 1e9, metrics.get("prompt_eval_duration", 0) / 1e9, metrics.get("eval_duration", 0) / 1e9, metrics.get("eval_count", 0))
+        assistant_message = metrics.get("message", {})
+        tool_calls = assistant_message.get("tool_calls", [])
+        if tool_calls:
+            # One action round is intentional: it prevents an accidental loop
+            # and each tool is independently checked by the registry.
+            if len(tool_calls) != 1:
+                raise ValueError("Only one Home Assistant action may be requested at a time")
+            call = tool_calls[0].get("function", {})
+            result = await self.tools.execute(call.get("name", ""), call.get("arguments"))
+            follow_up = {
+                **payload,
+                "messages": [
+                    *enriched_messages,
+                    assistant_message,
+                    {"role": "tool", "content": result},
+                ],
+            }
+            async with httpx.AsyncClient(timeout=timeout) as client:
+                response = await client.post(self.settings.ollama_url.rstrip("/") + "/api/chat", json=follow_up)
+                response.raise_for_status()
+            metrics = response.json()
         answer = metrics.get("message", {}).get("content", "").strip()
         if not answer:
             raise ValueError("Ollama returned an empty answer")

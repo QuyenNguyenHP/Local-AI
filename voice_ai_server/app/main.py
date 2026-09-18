@@ -51,7 +51,9 @@ async def lifespan(app: FastAPI):
         is_vietnamese_tts = settings.tts_language == "vi"
         wav = await services["tts"].synthesize("Sẵn sàng." if is_vietnamese_tts else "Ready.")
         await services["stt"].transcribe(wav, "vi" if is_vietnamese_tts else "en")
-        await services["chat"].complete([{"role": "user", "content": "Reply with only the word Ready."}])
+        # Warmup must work with a vision/text model too; it does not need to
+        # exercise optional physical-action tools.
+        await services["chat"].complete([{"role": "user", "content": "Reply with only the word Ready."}], allow_tools=False)
         log("Model warmup | ready after %.2fs", perf_counter() - start)
     yield
 
@@ -111,6 +113,30 @@ async def chat(body: ChatRequest, services=Depends(get_services)):
         answer = await services["chat"].complete(body.messages, body.model)
     except (httpx.HTTPError, ValueError) as exc:
         raise HTTPException(503, f"AI service failed: {exc}") from exc
+    return {"choices": [{"message": {"role": "assistant", "content": answer}}]}
+
+
+@app.post("/v1/images/chat", dependencies=[Depends(require_api_key)])
+async def image_chat(
+    image: UploadFile = File(...), prompt: str = Form(...), model: str | None = Form(default=None), services=Depends(get_services),
+):
+    settings = services["settings"]
+    if not prompt.strip() or len(prompt) > 10_000:
+        raise HTTPException(422, "prompt must contain 1 to 10,000 characters")
+    if image.content_type not in {"image/jpeg", "image/png", "image/webp"}:
+        raise HTTPException(422, "image must be JPEG, PNG, or WebP")
+    data = await image.read(settings.max_image_bytes + 1)
+    log("Image received | type=%s bytes=%d", image.content_type, len(data))
+    if not data or len(data) > settings.max_image_bytes:
+        raise HTTPException(413, "Image is empty or exceeds MAX_IMAGE_BYTES")
+    try:
+        # Gemma 3 supports images but not native tool calling, so this route
+        # intentionally keeps physical-action tools out of its Ollama payload.
+        answer = await services["chat"].complete(
+            [{"role": "user", "content": prompt.strip(), "image": data}], model, allow_tools=False
+        )
+    except (httpx.HTTPError, ValueError) as exc:
+        raise HTTPException(503, f"Image AI service failed: {exc}") from exc
     return {"choices": [{"message": {"role": "assistant", "content": answer}}]}
 
 

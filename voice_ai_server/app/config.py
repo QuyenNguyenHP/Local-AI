@@ -44,11 +44,21 @@ class Settings:
     kokoro_voice: str = "af_heart"
     kokoro_vi_device: str = "auto"
     max_audio_bytes: int = 25 * 1024 * 1024
+    max_image_bytes: int = 10 * 1024 * 1024
     max_history_messages: int = 12
+    ha_enabled: bool = False
+    ha_url: str = ""
+    ha_token: str = ""
+    ha_allowed_entities_raw: str = ""
+    ha_timeout_seconds: float = 10
 
     @property
     def allowed_origins(self) -> list[str]:
         return [item.strip() for item in self.cors_origins.split(",") if item.strip()]
+
+    @property
+    def ha_allowed_entities(self) -> set[str]:
+        return {item.strip() for item in self.ha_allowed_entities_raw.split(",") if item.strip()}
 
 
 @lru_cache
@@ -72,5 +82,11 @@ def get_settings() -> Settings:
         tts_language=os.getenv("TTS_LANGUAGE", "en").lower(),
         kokoro_lang_code=os.getenv("KOKORO_LANG_CODE", "a"), kokoro_voice=os.getenv("KOKORO_VOICE", "af_heart"),
         kokoro_vi_device=os.getenv("KOKORO_VI_DEVICE", "auto").lower(),
-        max_audio_bytes=int(os.getenv("MAX_AUDIO_BYTES", str(25 * 1024 * 1024))), max_history_messages=int(os.getenv("MAX_HISTORY_MESSAGES", "12")),
+        max_audio_bytes=int(os.getenv("MAX_AUDIO_BYTES", str(25 * 1024 * 1024))),
+        max_image_bytes=int(os.getenv("MAX_IMAGE_BYTES", str(10 * 1024 * 1024))),
+        max_history_messages=int(os.getenv("MAX_HISTORY_MESSAGES", "12")),
+        ha_enabled=os.getenv("HA_ENABLED", "0").lower() in {"1", "true", "yes"},
+        ha_url=os.getenv("HA_URL", "").rstrip("/"), ha_token=os.getenv("HA_TOKEN", ""),
+        ha_allowed_entities_raw=os.getenv("HA_ALLOWED_ENTITIES", ""),
+        ha_timeout_seconds=float(os.getenv("HA_TIMEOUT_SECONDS", "10")),
     )

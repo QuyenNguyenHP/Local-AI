@@ -43,7 +43,7 @@ Run Qdrant locally (its ports are deliberately bound to localhost):
 
 ```bash
 cd /home/daikai/Local-AI/voice_ai_server
-docker compose -f docker-compose.qdrant.yml up -d
+docker compose -f docker/compose.qdrant.yml up -d
 
 # Download the embedding model once. This must be the same model for indexing and queries.
 ollama pull embeddinggemma
@@ -74,7 +74,7 @@ this server is the single owner of Ollama embedding and Qdrant retrieval.
 
 ## Run the complete Voice AI server in Docker
 
-`docker-compose.qdrant.yml` manages both Qdrant and `voice-ai`. Ollama remains
+`docker/compose.qdrant.yml` manages both Qdrant and `voice-ai`. Ollama remains
 on the host, where it already manages its model and GPU; the container reaches it
 as `host.docker.internal`. Qdrant is private to the Docker network except for its
 localhost-only diagnostic port. The API remains available on port 8000.
@@ -92,11 +92,11 @@ to `.env` only when you want to override their defaults.
 cd /home/daikai/Local-AI/voice_ai_server
 
 # Build the Voice AI image and start both services.
-sudo docker compose -f docker-compose.qdrant.yml up -d --build
+sudo docker compose -f docker/compose.qdrant.yml up -d --build
 
 # Wait for warmup, then inspect the API and its logs.
 curl http://127.0.0.1:8000/healthz
-sudo docker compose -f docker-compose.qdrant.yml logs -f voice-ai
+sudo docker compose -f docker/compose.qdrant.yml logs -f voice-ai
 ```
 
 The Compose file deliberately overrides `OLLAMA_URL` to the host gateway and
@@ -106,15 +106,15 @@ anything on the host, run:
 
 ```bash
 cd /home/daikai/Local-AI/voice_ai_server
-sudo docker compose -f docker-compose.qdrant.yml run --rm voice-ai python index_knowledge.py
+sudo docker compose -f docker/compose.qdrant.yml run --rm voice-ai python index_knowledge.py
 ```
 
 Useful lifecycle commands:
 
 ```bash
-sudo docker compose -f docker-compose.qdrant.yml ps
-sudo docker compose -f docker-compose.qdrant.yml restart voice-ai
-sudo docker compose -f docker-compose.qdrant.yml down       # keeps named volumes and Qdrant data
+sudo docker compose -f docker/compose.qdrant.yml ps
+sudo docker compose -f docker/compose.qdrant.yml restart voice-ai
+sudo docker compose -f docker/compose.qdrant.yml down       # keeps named volumes and Qdrant data
 ```
 
 To update application code or dependencies, run `up -d --build` again. Editing
@@ -205,6 +205,58 @@ Initial model loading is logged separately; stage duration includes model loadin
 Failures include the stage name and traceback.
 Logs do not print transcripts, answers or full knowledge documents.
 
+## Home Assistant tool calling (optional)
+
+The chat and voice endpoints can let a tool-capable Ollama model control a
+small, explicit allowlist of Home Assistant switches. The model does not see
+the Home Assistant token and cannot run shell commands, call arbitrary URLs, or
+control an entity outside `HA_ALLOWED_ENTITIES`.
+
+First create a new dedicated Home Assistant long-lived access token and revoke
+any token that was pasted into a chat, source file, or terminal history. Put
+the new token only in `voice_ai_server/.env` (this file is gitignored):
+
+```dotenv
+# Select an Ollama model that supports tool/function calling.
+# Example: ollama pull qwen3:8b
+OLLAMA_MODEL=qwen3:8b
+
+HA_ENABLED=1
+HA_URL=https://home.dqtech.cloud
+HA_TOKEN=replace-with-a-new-dedicated-token
+HA_ALLOWED_ENTITIES=switch.t1_chieu_sang_switch_3
+HA_TIMEOUT_SECONDS=10
+```
+
+Restart the server after editing `.env`. A clear request such as `Bật đèn
+phòng khách` or `Tắt switch t1` lets the model call
+`home_assistant_switch`; the server validates the entity and state, then sends
+`POST /api/services/switch/turn_on` or `turn_off` to Home Assistant. The
+endpoint shown in the question, `turn_on`, turns the switch on; use `turn_off`
+to turn it off.
+
+Test Home Assistant independently before enabling AI control, without putting a
+real token in shell history:
+
+```bash
+read -rs HA_TOKEN
+curl --fail-with-body -X POST \
+  -H "Authorization: Bearer $HA_TOKEN" \
+  -H 'Content-Type: application/json' \
+  -d '{"entity_id":"switch.t1_chieu_sang_switch_3"}' \
+  https://home.dqtech.cloud/api/services/switch/turn_on
+unset HA_TOKEN
+```
+
+For additional devices, add their exact entity IDs to the comma-separated
+allowlist. Keep this server private or protect it with HTTPS and `API_KEY`:
+any client allowed to chat can request an allowed physical action. For a larger
+tool set, add a module under `app/tools/` and register it in
+`app/tools/registry.py`; never expose a generic `run_command`, `curl`, or
+arbitrary URL tool to the model. For natural names such as “đèn phòng khách”, add a short
+device-to-entity mapping to `knowledge/` and re-index it, or use the entity’s
+unambiguous friendly name in the request.
+
 ## API
 
 The base URL is `http://SERVER_IP:8000`, for example `http://192.168.1.10:8000`.
@@ -219,6 +271,7 @@ Authorization: Bearer <API_KEY>
 | `GET /healthz`                  | None                    | JSON                | HTTP server health       |
 | `POST /v1/audio/transcriptions` | `multipart/form-data` | JSON                | Audio to text            |
 | `POST /v1/chat/completions`     | `application/json`    | JSON                | Text-only AI answer      |
+| `POST /v1/images/chat`          | `multipart/form-data` | JSON                | Image + prompt AI answer |
 | `POST /v1/audio/speech`         | `application/json`    | Binary`audio/wav` | Text to speech           |
 | `POST /v1/voice/chat`           | `multipart/form-data` | WAV or JSON         | Complete voice assistant |
 
@@ -283,6 +336,30 @@ curl -X POST http://127.0.0.1:8000/v1/chat/completions \
 ```
 
 Before calling Ollama, the server selects knowledge for the last message and adds it to the prompt. Reference notes are not stored in conversation history, to avoid repeatedly expanding the prompt. This endpoint does **not** load or invoke Whisper STT or Kokoro TTS for the request. `web-chat` uses this endpoint at `http://127.0.0.1:8000` by default.
+
+### `POST /v1/images/chat` - Image understanding
+
+Input: `multipart/form-data`. This endpoint is intended for a vision model such
+as `gemma3:4b`; pass it explicitly as `model` if `OLLAMA_MODEL` is a different
+text/tool model. It accepts JPEG, PNG, and WebP images up to
+`MAX_IMAGE_BYTES` (10 MB by default), retrieves RAG context for the prompt, and
+returns text. Home Assistant tools are deliberately not sent on this route.
+
+```bash
+curl -X POST http://127.0.0.1:8000/v1/images/chat \
+  -H 'Authorization: Bearer <API_KEY>' \
+  -F 'image=@camera.jpg;type=image/jpeg' \
+  -F 'prompt=Trong ảnh có gì?' \
+  -F 'model=gemma3:4b'
+```
+
+```json
+{
+  "choices": [
+    { "message": { "role": "assistant", "content": "...AI image analysis..." } }
+  ]
+}
+```
 
 ### `POST /v1/audio/speech` - Text to speech
 

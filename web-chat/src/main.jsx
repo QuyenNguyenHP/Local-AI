@@ -13,6 +13,7 @@ import {
   Code2,
   Lightbulb,
   PenLine,
+  ImagePlus,
   X,
   RefreshCw,
 } from "lucide-react";
@@ -40,6 +41,17 @@ function readChats() {
     return [];
   }
 }
+async function readResponse(response) {
+  const text = await response.text();
+  if (!text) {
+    throw new Error(`Server returned an empty response (HTTP ${response.status}).`);
+  }
+  try {
+    return JSON.parse(text);
+  } catch {
+    throw new Error(`Server returned an invalid response (HTTP ${response.status}).`);
+  }
+}
 function App() {
   const [session, setSession] = useState(() => window.localStorage.getItem("dq-ai-session"));
   const [chats, setChats] = useState(readChats),
@@ -53,15 +65,22 @@ function App() {
     [sidebar, setSidebar] = useState(window.innerWidth > 760),
     [search, setSearch] = useState(""),
     [searchOpen, setSearchOpen] = useState(false),
-    [copied, setCopied] = useState(null);
+    [copied, setCopied] = useState(null),
+    [image, setImage] = useState(null),
+    [imagePreview, setImagePreview] = useState("");
   const controller = useRef(),
     bottom = useRef(),
-    textarea = useRef();
+    textarea = useRef(),
+    imageInput = useRef();
   const chat = chats.find((c) => c.id === active),
     messages = chat?.messages || [];
   useEffect(() => {
     try {
-      localStorage.setItem(KEY, JSON.stringify(chats));
+      // Object URLs are session-only and must not be persisted to localStorage.
+      localStorage.setItem(KEY, JSON.stringify(chats.map((chat) => ({
+        ...chat,
+        messages: chat.messages.map(({ imagePreview, ...message }) => message),
+      }))));
     } catch {
       setError(
         "Browser storage is full. Delete older conversations to save new chats.",
@@ -105,11 +124,22 @@ function App() {
         Math.min(textarea.current.scrollHeight, 180) + "px";
     }
   }, [input]);
+  useEffect(() => {
+    if (!image) {
+      setImagePreview("");
+      return undefined;
+    }
+    const preview = URL.createObjectURL(image);
+    setImagePreview(preview);
+    return () => URL.revokeObjectURL(preview);
+  }, [image]);
   function newChat() {
     if (busy) return;
     setActive(null);
     setInput("");
     setError("");
+    setImage(null);
+    if (imageInput.current) imageInput.current.value = "";
     if (window.innerWidth < 760) setSidebar(false);
     textarea.current?.focus();
   }
@@ -130,12 +160,19 @@ function App() {
   async function send(event) {
     event?.preventDefault();
     const prompt = input.trim();
-    if (!prompt || busy || !model) return;
+    if ((!prompt && !image) || busy || !model) return;
+    const imagePrompt = prompt || "Hãy mô tả ảnh này.";
+    // The composer preview is revoked when its selected File is cleared. Use a
+    // separate URL for the message so the sent image remains visible.
+    const sentImagePreview = image ? URL.createObjectURL(image) : "";
     const id = active || crypto.randomUUID(),
       answerId = crypto.randomUUID();
     const history = [
       ...messages.filter((m) => m.content.trim()),
-      { id: crypto.randomUUID(), role: "user", content: prompt },
+      {
+        id: crypto.randomUUID(), role: "user", content: imagePrompt,
+        ...(image && { imageName: image.name, imagePreview: sentImagePreview }),
+      },
     ];
     const next = [...history, { id: answerId, role: "assistant", content: "" }];
     setChats((prev) =>
@@ -145,27 +182,34 @@ function App() {
     );
     setActive(id);
     setInput("");
+    setImage(null);
+    if (imageInput.current) imageInput.current.value = "";
     setError("");
     setBusy(true);
     controller.current = new AbortController();
     let answer = "";
     try {
-      const response = await fetch("/api/chat", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        signal: controller.current.signal,
-        body: JSON.stringify({
-          model,
-          messages: history
-            .slice(-40)
-            .map(({ role, content }) => ({ role, content })),
-        }),
-      });
+      const response = image
+        ? await (() => {
+            const form = new FormData();
+            form.append("image", image);
+            form.append("prompt", imagePrompt);
+            form.append("model", model);
+            return fetch("/api/images/chat", { method: "POST", body: form, signal: controller.current.signal });
+          })()
+        : await fetch("/api/chat", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            signal: controller.current.signal,
+            body: JSON.stringify({
+              model,
+              messages: history.slice(-40).map(({ role, content }) => ({ role, content })),
+            }),
+          });
+      const data = await readResponse(response);
       if (!response.ok) {
-        const data = await response.json();
         throw new Error(data.error || "Request failed");
       }
-      const data = await response.json();
       answer = data.choices?.[0]?.message?.content || "";
       updateMessage(id, answerId, answer);
       if (!answer.trim())
@@ -175,7 +219,7 @@ function App() {
     } catch (e) {
       if (e.name !== "AbortError") {
         setError(e.message);
-        if (!answer) setInput(prompt);
+        if (!answer) setInput(image ? imagePrompt : prompt);
       }
     } finally {
       setBusy(false);
@@ -402,6 +446,15 @@ function App() {
             </div>
           )}
           <form className="composer" onSubmit={send}>
+            {image && (
+              <div className="image-preview">
+                <img src={imagePreview} alt="Selected upload" />
+                <span>{image.name}</span>
+                <button type="button" onClick={() => { setImage(null); imageInput.current.value = ""; }} aria-label="Remove image">
+                  <X size={14} />
+                </button>
+              </div>
+            )}
             <textarea
               ref={textarea}
               value={input}
@@ -422,6 +475,16 @@ function App() {
               maxLength={32000}
             />
             <div className="composer-bottom">
+              <button type="button" className="attach-button" onClick={() => imageInput.current?.click()} disabled={busy} aria-label="Upload image">
+                <ImagePlus size={18} /> <span>Add image</span>
+              </button>
+              <input ref={imageInput} className="image-input" type="file" accept="image/jpeg,image/png,image/webp" onChange={(event) => {
+                const file = event.target.files?.[0];
+                if (!file) return;
+                if (file.size > 10 * 1024 * 1024) { setError("Image must be 10 MB or smaller."); event.target.value = ""; return; }
+                setImage(file);
+                setError("");
+              }} />
               <span>
                 <span className="status-dot" />{" "}
                 {model ? model.replace(":latest", "") : "Connect a local model"}
@@ -438,7 +501,7 @@ function App() {
               ) : (
                 <button
                   className="send-button"
-                  disabled={!input.trim() || !model}
+                  disabled={(!input.trim() && !image) || !model}
                   aria-label="Send message"
                 >
                   <ArrowUp size={20} />

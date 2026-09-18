@@ -11,11 +11,12 @@ services:
 
   voice-ai:
     build:
-      context: .
-      dockerfile: Dockerfile
+      # Build context remains the project root so COPY paths in Dockerfile work.
+      context: ..
+      dockerfile: docker/Dockerfile
     restart: unless-stopped
     env_file:
-      - .env
+      - ../.env
     environment:
       # Ollama stays on the host and is reached through Docker's host gateway.
       OLLAMA_URL: http://host.docker.internal:11434
@@ -34,7 +35,7 @@ services:
       - "8000:8000"
     volumes:
       # Markdown can be edited without rebuilding the image; re-index after edits.
-      - ./knowledge:/app/knowledge:ro
+      - ../knowledge:/app/knowledge:ro
       - voice_ai_hf_cache:/root/.cache/huggingface
     depends_on:
       - qdrant
