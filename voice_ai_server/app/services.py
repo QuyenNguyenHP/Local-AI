@@ -133,7 +133,12 @@ class OllamaChat:
         log("Knowledge lookup | question=%d characters", len(latest_question))
         context = await build_context(latest_question, self.rag)
         log("Knowledge lookup | completed in %.2fs, prompt=%d characters", perf_counter() - start, len(context))
-        context = "Keep your answer concise, usually 1 to 3 short sentences. " + context
+        context = (
+            "Answer clearly and with enough detail to fully address the question. "
+            "Keep simple answers concise, but for technical or complex questions provide "
+            "a structured explanation, practical steps, important caveats, and useful examples. "
+            + context
+        )
         latest_message: dict[str, Any] = {"role": "user", "content": context}
         image = messages[-1].get("image")
         if isinstance(image, bytes):

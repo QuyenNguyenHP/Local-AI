@@ -1,2 +1,17 @@
-# Python virtual environments
+# Local secrets and environment overrides (keep documented examples tracked)
+**/.env
+**/.env.*
+!**/.env.example
+
+# Python virtual environments and local backups
 .venv/
+.venv-*/
+**/.venv/
+**/.venv-*/
+
+# Downloaded installer packages
+*.deb
+
+# Accidental npm lockfiles outside the Node application
+/package-lock.json
+/voice_ai_server/package-lock.json

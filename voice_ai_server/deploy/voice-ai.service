@@ -1,0 +1,22 @@
+[Unit]
+Description=Local Voice AI API
+Wants=network-online.target
+After=network-online.target docker.service ollama.service
+
+[Service]
+Type=simple
+User=daikai
+Group=daikai
+WorkingDirectory=/home/daikai/Local-AI/voice_ai_server
+Environment=HOME=/home/daikai
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/home/daikai/Local-AI/.venv/bin/python /home/daikai/Local-AI/voice_ai_server/run.py
+Restart=always
+RestartSec=5
+TimeoutStopSec=30
+KillSignal=SIGINT
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

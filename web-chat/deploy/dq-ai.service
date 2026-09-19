@@ -1,12 +1,14 @@
 [Unit]
 Description=DQ AI local Ollama chat web app
-After=network.target ollama.service docker.service
+Wants=network-online.target voice-ai.service
+After=network-online.target voice-ai.service
 
 [Service]
 Type=simple
-User=dq
-Group=dq
-WorkingDirectory=/home/dq/Local AI/web-chat
+User=daikai
+Group=daikai
+WorkingDirectory=/home/daikai/Local-AI/web-chat
+Environment=HOME=/home/daikai
 Environment=NODE_ENV=production
 Environment=OLLAMA_URL=http://127.0.0.1:11434
 Environment=OLLAMA_MODEL=dq-assistant:latest
@@ -14,9 +16,11 @@ Environment=OLLAMA_MODEL=dq-assistant:latest
 Environment=VOICE_AI_URL=http://127.0.0.1:8000
 Environment=VOICE_AI_API_KEY=
 Environment=PORT=3001
-ExecStart=/usr/bin/node server/index.js
-Restart=on-failure
+ExecStart=/home/daikai/.nvm/versions/node/v22.23.2/bin/node /home/daikai/Local-AI/web-chat/server/index.js
+Restart=always
 RestartSec=5
+TimeoutStopSec=20
+KillSignal=SIGINT
 NoNewPrivileges=true
 PrivateTmp=true
 

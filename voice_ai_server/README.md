@@ -72,6 +72,16 @@ put it behind a private network plus its API key; it should not be exposed direc
 to the Internet. `web-chat` sends its requests to this API's text-chat endpoint;
 this server is the single owner of Ollama embedding and Qdrant retrieval.
 
+To diagnose an empty retrieval, run a search without the configured score threshold:
+
+```bash
+cd /home/daikai/Local-AI
+.venv/bin/python voice_ai_server/check_rag.py "What tools and technologies does Mike work with?"
+```
+
+The command reports the total and active point counts, embedding dimensions, top
+similarity scores, and which candidates pass `RAG_SCORE_THRESHOLD`.
+
 ## Run the complete Voice AI server in Docker
 
 `docker/compose.qdrant.yml` manages both Qdrant and `voice-ai`. Ollama remains
@@ -163,15 +173,38 @@ See the [Faster-Whisper GPU guide](https://github.com/SYSTRAN/faster-whisper#gpu
 Check the driver with `nvidia-smi` before starting.
 
 Use PyTorch CUDA 12.8 so Kokoro and Whisper share compatible CUDA/cuDNN libraries.
-In a new environment, install in this order:
+If the existing virtual environment contains CUDA 13 packages, preserve it as a
+backup and create a clean CUDA 12.8 environment:
 
 ```bash
 cd /home/daikai/Local-AI
+
+mv .venv .venv-cuda13-backup
+
+python3.12 -m venv .venv
+.venv/bin/python -m pip install --upgrade pip setuptools wheel
+
+.venv/bin/python -m pip install \
+  -r voice_ai_server/requirements-gpu.txt
+
+.venv/bin/python -m pip install \
+  -r voice_ai_server/requirements.txt
+```
+
+For a new environment where `.venv` does not already exist, create it and install
+the requirements in the same order:
+
+```bash
+cd /home/daikai/Local-AI
+python3.12 -m venv .venv
+.venv/bin/python -m pip install --upgrade pip setuptools wheel
 .venv/bin/python -m pip install -r voice_ai_server/requirements-gpu.txt
 .venv/bin/python -m pip install -r voice_ai_server/requirements.txt
 ```
 
-If an existing environment contains `nvidia-cudnn-cu13`, uninstall it **before** installing the GPU requirements above, to avoid two cuDNN packages writing to the same directory. Do not reuse the former separate libraries in `.venv/cuda12`.
+Do not install the CUDA 12 requirements over an environment containing
+`nvidia-cudnn-cu13`: the packages can write incompatible libraries into the same
+directory. Also, do not reuse the former separate libraries in `.venv/cuda12`.
 
 Set these values in `voice_ai_server/.env`:
 
@@ -450,7 +483,7 @@ Clients do not send model weights. The server loads faster-whisper weights only 
 | `OLLAMA_URL`             | URL     | `http://127.0.0.1:11434` | Ollama API address.                                                            |
 | `OLLAMA_TIMEOUT_SECONDS` | Number  | `120`                    | Maximum wait for Ollama.                                                       |
 | `OLLAMA_NUM_CTX`         | Integer | `4096`                   | Context window in tokens.                                                      |
-| `OLLAMA_NUM_PREDICT`     | Integer | `256`                    | Maximum generated tokens.                                                      |
+| `OLLAMA_NUM_PREDICT`     | Integer | `1024`                   | Maximum generated tokens.                                                       |
 | `OLLAMA_KEEP_ALIVE`      | String  | `30m`                    | Requested model retention time after a request.                                |
 | `KOKORO_LANG_CODE`       | String  | `a`                      | Kokoro pipeline language code.                                                 |
 | `KOKORO_VOICE`           | String  | `af_heart`               | Default TTS voice.                                                             |
@@ -503,7 +536,7 @@ These values are applied in `.env` and `.env.example`:
 ```dotenv
 WHISPER_BEAM_SIZE=1
 OLLAMA_NUM_CTX=4096
-OLLAMA_NUM_PREDICT=256
+OLLAMA_NUM_PREDICT=1024
 ```
 
 - Beam size `1` reduces decoding work compared with the former value `5`, with a possible accuracy tradeoff.

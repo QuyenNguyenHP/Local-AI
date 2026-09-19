@@ -26,7 +26,7 @@ class Settings:
     whisper_compute_type: str = "int8"
     whisper_beam_size: int = 1
     ollama_num_ctx: int = 4096
-    ollama_num_predict: int = 256
+    ollama_num_predict: int = 1024
     ollama_url: str = "http://127.0.0.1:11434"
     # Match web-chat's default. Set OLLAMA_MODEL to override it per deployment.
     ollama_model: str = "dq-assistant:latest"
@@ -78,7 +78,7 @@ def get_settings() -> Settings:
         rag_max_chars=int(os.getenv("RAG_MAX_CHARS", "9000")),
         whisper_beam_size=int(os.getenv("WHISPER_BEAM_SIZE", "1")),
         ollama_num_ctx=int(os.getenv("OLLAMA_NUM_CTX", "4096")),
-        ollama_num_predict=int(os.getenv("OLLAMA_NUM_PREDICT", "256")),
+        ollama_num_predict=int(os.getenv("OLLAMA_NUM_PREDICT", "1024")),
         tts_language=os.getenv("TTS_LANGUAGE", "en").lower(),
         kokoro_lang_code=os.getenv("KOKORO_LANG_CODE", "a"), kokoro_voice=os.getenv("KOKORO_VOICE", "af_heart"),
         kokoro_vi_device=os.getenv("KOKORO_VI_DEVICE", "auto").lower(),
