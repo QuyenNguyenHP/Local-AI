@@ -23,7 +23,9 @@ npm run build
 npm start
 ```
 
-Open http://127.0.0.1:3001. Express serves both the built frontend and API.
+Express serves both the built frontend and API. On this computer, open
+`http://127.0.0.1:3001`. Devices on the same network can use the server's LAN
+address, for example `http://192.168.10.242:3001`.
 
 Optional shell environment variables:
 
@@ -31,6 +33,7 @@ Optional shell environment variables:
 - `OLLAMA_MODEL`: preferred model, default `dq-assistant:latest`.
 - `VOICE_AI_URL`: Voice AI API URL, default `http://127.0.0.1:8000`.
 - `VOICE_AI_API_KEY`: optional bearer token for the Voice AI API.
+- `HOST`: listen address, default `0.0.0.0` so devices on the same network can connect.
 - `PORT`: backend port, default `3001`. The development proxy expects port 3001.
 
 Example: `OLLAMA_MODEL=gemma3:4b npm start`
@@ -46,7 +49,8 @@ Example: `OLLAMA_MODEL=gemma3:4b npm start`
 
 Conversation history is stored in this browser's localStorage, not in a server database. Clearing browser data removes it. Each text chat request is forwarded to `POST /v1/chat/completions` on `voice_ai_server`; that server owns RAG, Ollama embeddings and Qdrant. It does not invoke Whisper or Kokoro for this endpoint. Changes under `voice_ai_server/knowledge/` take effect after rerunning the indexer.
 
-The server binds to loopback for personal local use. Authentication and multi-user storage are not included.
+`npm start` binds to all network interfaces. Authentication and multi-user
+storage are not included, so expose it only on a trusted network.
 
 ## Verify
 

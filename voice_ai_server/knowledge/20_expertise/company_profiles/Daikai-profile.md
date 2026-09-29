@@ -10,7 +10,6 @@ sensitivity: internal-reference
 aliases: [Daikai, Daikai Engineering, Daikai Engineering Pte. Ltd.]
 tags: [daikai, mike, employer, marine-engineering, marine-automation, commissioning, maintenance, spare-parts, drums]
 ---
-
 # Daikai Engineering Profile
 
 ## Knowledge Scope and Reliability
@@ -26,6 +25,7 @@ This document records company information supplied by Mike for use in his person
 - Employees: approximately 200 as of January 2024
 - Telephone: +65 6863 2856
 - Fax: +65 6863 2876
+- Website: daikai.com
 - General sales email: sales@daikai.com
 
 ## Business Scope

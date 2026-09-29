@@ -1,5 +1,6 @@
 import { createApp } from "./app.js";
 const port = Number(process.env.PORT || 3001);
-createApp().listen(port, "127.0.0.1", () =>
-  console.log(`Local AI running at http://127.0.0.1:${port}`),
+const host = process.env.HOST || "0.0.0.0";
+createApp().listen(port, host, () =>
+  console.log("Local AI running at http://" + host + ":" + port),
 );

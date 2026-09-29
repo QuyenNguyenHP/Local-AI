@@ -2,6 +2,9 @@
 #include <string.h>
 #include <WiFi.h>
 #include <HTTPClient.h>
+#include <WebServer.h>
+#include <DNSServer.h>
+#include <Preferences.h>
 #include "ESP_I2S.h"
 #include "ESP_SR.h"  // Also links the ESP-SR component in Arduino builds.
 #include "esp_afe_config.h"
@@ -10,7 +13,6 @@
 #include "model_path.h"
 #include "esp_heap_caps.h"
 #include "secrets.h"
-#include "status_display.h"
 
 // ESP32-S3-Touch-LCD-1.85C V1 digital microphone.
 constexpr int MIC_WS_PIN = 2;
@@ -23,7 +25,13 @@ constexpr int SPEAKER_LRCK_PIN = 38;
 constexpr int SPEAKER_DATA_PIN = 47;
 
 constexpr uint32_t SAMPLE_RATE = 16000;
-constexpr char FIRMWARE_ID[] = "wake-record-voice-ai-v2";
+constexpr char FIRMWARE_ID[] = "wake-record-ai-stream-v1";
+
+// Wi-Fi setup portal. If saved and secrets.h credentials both fail, connect
+// a phone/laptop to this AP and browse to http://192.168.4.1.
+constexpr char SETUP_AP_SSID[] = "ESP32-Voice-Setup";
+constexpr char SETUP_AP_PASSWORD[] = "configureme";
+constexpr uint32_t WIFI_CONNECT_TIMEOUT_MS = 15000;
 
 // Speaker playback volume: 100 = original, 50 = half, 200 = twice.
 // Values above 100 can clip loud recordings.
@@ -33,13 +41,15 @@ constexpr uint16_t PLAYBACK_VOLUME_PERCENT = 200;
 constexpr bool MIC_IS_LEFT_CHANNEL = false;
 
 // Recording behavior. SILENCE_THRESHOLD is the average absolute 16-bit level.
-constexpr uint32_t MAX_RECORD_MS = 8000;
-constexpr uint32_t WAIT_FOR_SPEECH_MS = 3000;
+constexpr uint32_t MAX_RECORD_MS = 20000;
+constexpr uint32_t WAIT_FOR_SPEECH_MS = 5000;
 constexpr uint32_t FOLLOW_UP_WAIT_MS = 8000;
-constexpr uint32_t END_SILENCE_MS = 900;
+// Allow natural pauses while the user is forming a longer question. Recording
+// stops only after 2.8 seconds without speech, or at MAX_RECORD_MS.
+constexpr uint32_t END_SILENCE_MS = 2800;
 constexpr uint32_t MIN_SPEECH_MS = 300;
-constexpr uint32_t PRE_ROLL_MS = 200;
-constexpr uint16_t SILENCE_THRESHOLD = 450;
+constexpr uint32_t PRE_ROLL_MS = 300;
+constexpr uint16_t SILENCE_THRESHOLD = 300;
 constexpr size_t READ_FRAMES = 256;
 constexpr size_t MAX_RECORD_SAMPLES = (SAMPLE_RATE * MAX_RECORD_MS) / 1000;
 
@@ -60,8 +70,6 @@ volatile bool recognitionPaused = false;
 volatile bool feedTaskPaused = false;
 bool ready = false;
 bool conversationActive = false;
-char sessionId[32] = {};
-uint32_t conversationNumber = 0;
 
 srmodel_list_t *speechModels = nullptr;
 const esp_afe_sr_iface_t *afeHandle = nullptr;
@@ -231,10 +239,8 @@ size_t recordUtterance(uint32_t waitForSpeechMs) {
   const uint32_t recordStartMs = millis();
 
   Serial.println("Recording...");
-  statusDisplayShow("Listening", "Speak now");
 
   while (storedSamples < MAX_RECORD_SAMPLES) {
-    statusDisplayPoll();
     const size_t bytesRead = micI2S.readBytes(
         reinterpret_cast<char *>(stereo), sizeof(stereo));
     const size_t framesRead = bytesRead / (sizeof(int16_t) * 2);
@@ -297,34 +303,6 @@ uint32_t readLe32(const uint8_t *data) {
          (static_cast<uint32_t>(data[3]) << 24);
 }
 
-void writeLe16(uint8_t *data, uint16_t value) {
-  data[0] = value & 0xff;
-  data[1] = (value >> 8) & 0xff;
-}
-
-void writeLe32(uint8_t *data, uint32_t value) {
-  data[0] = value & 0xff;
-  data[1] = (value >> 8) & 0xff;
-  data[2] = (value >> 16) & 0xff;
-  data[3] = (value >> 24) & 0xff;
-}
-
-// The Voice AI server expects a conventional mono, 16-bit PCM WAV upload.
-void writePcmWavHeader(uint8_t *header, uint32_t pcmBytes) {
-  memcpy(header, "RIFF", 4);
-  writeLe32(header + 4, 36 + pcmBytes);
-  memcpy(header + 8, "WAVEfmt ", 8);
-  writeLe32(header + 16, 16);
-  writeLe16(header + 20, 1);
-  writeLe16(header + 22, 1);
-  writeLe32(header + 24, SAMPLE_RATE);
-  writeLe32(header + 28, SAMPLE_RATE * sizeof(int16_t));
-  writeLe16(header + 32, sizeof(int16_t));
-  writeLe16(header + 34, 16);
-  memcpy(header + 36, "data", 4);
-  writeLe32(header + 40, pcmBytes);
-}
-
 bool playWav(HTTPClient &http) {
   WiFiClient *stream = http.getStreamPtr();
   uint8_t header[44];
@@ -353,11 +331,9 @@ bool playWav(HTTPClient &http) {
   }
 
   Serial.printf("Playing AI response at %u Hz...\n", sampleRate);
-  statusDisplayShow("Answering", "Playing AI response");
   uint8_t buffer[1024];
   uint32_t played = 0;
   while (remaining > 0) {
-    statusDisplayPoll();
     const size_t wanted = min(static_cast<uint32_t>(sizeof(buffer)), remaining);
     const size_t received = stream->readBytes(buffer, wanted);
     if (received == 0) break;
@@ -377,110 +353,184 @@ bool playWav(HTTPClient &http) {
   return remaining == 0;
 }
 
-// Called from loop only; keep the error visible before resuming WakeNet.
-void showAssistantError(const char *message, const char *detail) {
-  Serial.printf("Assistant error: %s (%s)\n", message, detail);
-  statusDisplayShow(message, detail);
-  const uint32_t started = millis();
-  while (millis() - started < 5000) {
-    statusDisplayPoll();
-    delay(10);
-  }
+void resetServerConversation() {
+  HTTPClient http;
+  http.begin(VOICE_SERVER_URL);
+  const int status = http.sendRequest("DELETE");
+  Serial.printf("New conversation (server status %d).\n", status);
+  http.end();
 }
 
 bool askAssistant(size_t sampleCount) {
-  if (WiFi.status() != WL_CONNECTED) {
-    showAssistantError("Wi-Fi disconnected", "Check Wi-Fi connection");
-    return false;
-  }
-  statusDisplayShow("Thinking...", "Waiting for AI server");
-  // /v1/voice/chat accepts multipart/form-data. Keep the temporary request
-  // body in PSRAM, alongside rather than replacing the recording buffer.
-  constexpr char boundary[] = "----ESP32VoiceAI7MA4YWxkTrZu0gW";
-  const String audioPart = String("--") + boundary + "\r\n" +
-      "Content-Disposition: form-data; name=\"audio\"; filename=\"question.wav\"\r\n" +
-      "Content-Type: audio/wav\r\n\r\n";
-  const String sessionPart = String("\r\n--") + boundary + "\r\n" +
-      "Content-Disposition: form-data; name=\"session_id\"\r\n\r\n" +
-      sessionId + "\r\n--" + boundary + "--\r\n";
-  const size_t pcmBytes = sampleCount * sizeof(int16_t);
-  const size_t bodyBytes = audioPart.length() + 44 + pcmBytes + sessionPart.length();
-  uint8_t *body = static_cast<uint8_t *>(heap_caps_malloc(
-      bodyBytes, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
-  if (body == nullptr) {
-    Serial.println("Could not allocate the HTTP upload buffer in PSRAM.");
-    showAssistantError("Not enough memory", "Cannot send recording");
-    return false;
-  }
-
-  size_t offset = 0;
-  memcpy(body + offset, audioPart.c_str(), audioPart.length());
-  offset += audioPart.length();
-  writePcmWavHeader(body + offset, pcmBytes);
-  offset += 44;
-  memcpy(body + offset, recording, pcmBytes);
-  offset += pcmBytes;
-  memcpy(body + offset, sessionPart.c_str(), sessionPart.length());
-
   HTTPClient http;
   http.setConnectTimeout(5000);
   http.setTimeout(180000);
-  if (!http.begin(VOICE_SERVER_URL)) {
-    heap_caps_free(body);
-    showAssistantError("API setup failed", "Check server URL");
-    return false;
-  }
-  http.addHeader("Content-Type", String("multipart/form-data; boundary=") + boundary);
-#ifdef VOICE_SERVER_API_KEY
-  if (strlen(VOICE_SERVER_API_KEY) > 0) {
-    http.addHeader("Authorization", String("Bearer ") + VOICE_SERVER_API_KEY);
-  }
-#endif
+  http.begin(VOICE_SERVER_URL);
+  http.addHeader("Content-Type", "application/octet-stream");
+  http.addHeader("X-Sample-Rate", String(SAMPLE_RATE));
+  const char *wantedHeaders[] = {"X-User-Text", "X-Assistant-Text"};
+  http.collectHeaders(wantedHeaders, 2);
 
-  Serial.printf("Uploading %.2f seconds of WAV audio...\n",
+  Serial.printf("Uploading %.2f seconds of audio...\n",
                 static_cast<float>(sampleCount) / SAMPLE_RATE);
-  const int status = http.POST(body, bodyBytes);
-  heap_caps_free(body);
+  const int status = http.POST(reinterpret_cast<uint8_t *>(recording),
+                               sampleCount * sizeof(int16_t));
   if (status != HTTP_CODE_OK) {
-    Serial.printf("Assistant request failed: HTTP %d\n", status);
+    Serial.printf("Assistant request failed: HTTP %d, %s\n", status,
+                  http.getString().c_str());
     http.end();
-    const String code = String("HTTP ") + status;
-    if (WiFi.status() != WL_CONNECTED) {
-      showAssistantError("Wi-Fi disconnected", "Check Wi-Fi connection");
-    } else if (status == HTTPC_ERROR_READ_TIMEOUT) {
-      showAssistantError("Server timeout", "Please try again later");
-    } else if (status < 0) {
-      showAssistantError("Cannot reach server", "Check server, IP and port");
-    } else if (status == 401 || status == 403) {
-      showAssistantError("Access denied", "Check API key");
-    } else if (status >= 500) {
-      showAssistantError("AI server error", code.c_str());
-    } else {
-      showAssistantError("Request failed", code.c_str());
-    }
     return false;
   }
+  Serial.printf("You: %s\n", http.header("X-User-Text").c_str());
+  Serial.printf("Assistant: %s\n", http.header("X-Assistant-Text").c_str());
   const bool played = playWav(http);
   http.end();
-  if (!played) {
-    showAssistantError("Audio response error", "Invalid WAV or playback failed");
-  }
   return played;
 }
 
-bool connectWiFi() {
+bool tryWiFi(const String &ssid, const String &password) {
+  if (ssid.isEmpty()) return false;
   WiFi.mode(WIFI_STA);
-  WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
-  Serial.printf("Connecting to Wi-Fi %s", WIFI_SSID);
+  WiFi.begin(ssid.c_str(), password.c_str());
+  Serial.printf("Connecting to Wi-Fi %s", ssid.c_str());
   const uint32_t started = millis();
-  while (WiFi.status() != WL_CONNECTED && millis() - started < 20000) {
+  while (WiFi.status() != WL_CONNECTED &&
+         millis() - started < WIFI_CONNECT_TIMEOUT_MS) {
     delay(250);
     Serial.print('.');
   }
   Serial.println();
-  if (WiFi.status() != WL_CONNECTED) return false;
+  if (WiFi.status() != WL_CONNECTED) {
+    WiFi.disconnect();
+    return false;
+  }
   Serial.printf("Wi-Fi connected: %s\n", WiFi.localIP().toString().c_str());
   return true;
+}
+
+String htmlEscape(String value) {
+  value.replace("&", "&amp;");
+  value.replace("<", "&lt;");
+  value.replace(">", "&gt;");
+  value.replace("\"", "&quot;");
+  value.replace("'", "&#39;");
+  return value;
+}
+
+String setupPage(const String &message = "") {
+  String page =
+      "<!doctype html><html><head><meta name='viewport' content='width=device-width,initial-scale=1'>"
+      "<title>ESP32 Voice Wi-Fi</title><style>body{font-family:sans-serif;max-width:480px;margin:40px auto;padding:20px}"
+      "input,select,button{box-sizing:border-box;width:100%;padding:12px;margin:7px 0}"
+      "button{background:#1769aa;color:white;border:0}</style></head><body>"
+      "<h2>ESP32 Voice Assistant</h2>";
+  if (!message.isEmpty()) page += "<p>" + htmlEscape(message) + "</p>";
+  page += "<form method='post' action='/save'><label>Wi-Fi network</label><select name='ssid'>";
+
+  const int count = WiFi.scanNetworks();
+  for (int i = 0; i < count; ++i) {
+    const String ssid = htmlEscape(WiFi.SSID(i));
+    page += "<option value='" + ssid + "'>" + ssid + " (" +
+            String(WiFi.RSSI(i)) + " dBm)</option>";
+  }
+  WiFi.scanDelete();
+  page +=
+      "</select><label>Wi-Fi password</label><input name='password' type='password' maxlength='63'>"
+      "<button type='submit'>Save and connect</button></form>"
+      "<p>If this page did not open automatically, browse to <b>192.168.4.1</b>.</p></body></html>";
+  return page;
+}
+
+bool runWiFiSetupPortal() {
+  WiFi.mode(WIFI_AP_STA);
+  if (!WiFi.softAP(SETUP_AP_SSID, SETUP_AP_PASSWORD)) {
+    Serial.println("Could not start Wi-Fi setup AP.");
+    return false;
+  }
+
+  const IPAddress apIP = WiFi.softAPIP();
+  DNSServer dns;
+  WebServer web(80);
+  bool credentialsSubmitted = false;
+  String submittedSsid;
+  String submittedPassword;
+  String statusMessage = "Select the Wi-Fi network used by the AI server.";
+
+  dns.start(53, "*", apIP);
+  web.on("/", HTTP_GET, [&]() {
+    web.send(200, "text/html", setupPage(statusMessage));
+  });
+  web.on("/save", HTTP_POST, [&]() {
+    submittedSsid = web.arg("ssid");
+    submittedPassword = web.arg("password");
+    if (submittedSsid.isEmpty()) {
+      web.send(400, "text/html", setupPage("Please select a Wi-Fi network."));
+      return;
+    }
+    web.send(200, "text/html",
+             "<html><meta name='viewport' content='width=device-width'><body>"
+             "<h3>Credentials received</h3><p>The ESP32 is testing the connection. "
+             "Watch Serial Monitor; this setup network will close when connected.</p></body></html>");
+    credentialsSubmitted = true;
+  });
+  web.onNotFound([&]() {
+    web.sendHeader("Location", String("http://") + apIP.toString(), true);
+    web.send(302, "text/plain", "");
+  });
+  web.begin();
+
+  Serial.printf("Wi-Fi setup AP started.\n  Network: %s\n  Password: %s\n  Open: http://%s\n",
+                SETUP_AP_SSID, SETUP_AP_PASSWORD, apIP.toString().c_str());
+
+  while (true) {
+    dns.processNextRequest();
+    web.handleClient();
+    if (!credentialsSubmitted) {
+      delay(5);
+      continue;
+    }
+
+    credentialsSubmitted = false;
+    delay(500);  // Give the browser time to receive the confirmation page.
+    web.stop();
+    dns.stop();
+    WiFi.softAPdisconnect(true);
+
+    if (tryWiFi(submittedSsid, submittedPassword)) {
+      Preferences preferences;
+      preferences.begin("voice-wifi", false);
+      preferences.putString("ssid", submittedSsid);
+      preferences.putString("password", submittedPassword);
+      preferences.end();
+      Serial.println("Wi-Fi credentials saved in flash.");
+      return true;
+    }
+
+    statusMessage = "Connection failed. Check the password and try again.";
+    Serial.println("Wi-Fi connection failed; restarting setup portal.");
+    WiFi.mode(WIFI_AP_STA);
+    WiFi.softAP(SETUP_AP_SSID, SETUP_AP_PASSWORD);
+    dns.start(53, "*", WiFi.softAPIP());
+    web.begin();
+  }
+}
+
+bool connectWiFi() {
+  Preferences preferences;
+  preferences.begin("voice-wifi", true);
+  const String savedSsid = preferences.getString("ssid", "");
+  const String savedPassword = preferences.getString("password", "");
+  preferences.end();
+
+  if (!savedSsid.isEmpty() && tryWiFi(savedSsid, savedPassword)) return true;
+
+  const String fallbackSsid = WIFI_SSID;
+  if (!fallbackSsid.isEmpty() && fallbackSsid != "your-wifi-name" &&
+      fallbackSsid != savedSsid && tryWiFi(fallbackSsid, WIFI_PASSWORD)) {
+    return true;
+  }
+
+  return runWiFiSetupPortal();
 }
 
 void setup() {
@@ -488,39 +538,27 @@ void setup() {
   delay(1500);
   Serial.printf("Starting %s (built %s %s)...\n", FIRMWARE_ID,
                 __DATE__, __TIME__);
-  statusDisplayInit();
 
   if (!psramFound()) {
     Serial.println("PSRAM is required. Enable it in Arduino Tools > PSRAM.");
-    statusDisplayShow("PSRAM required", "Enable OPI PSRAM");
     return;
   }
 
-  statusDisplayShow("Connecting Wi-Fi...", "Please wait");
   if (!connectWiFi()) {
-    Serial.println("Wi-Fi connection failed. Check secrets.h.");
-    statusDisplayShow("Wi-Fi failed", "Check secrets.h");
+    Serial.println("Wi-Fi setup failed. Reset the board to try again.");
     return;
   }
 
   // Initialize only the microphone before the speech model.
-  if (!initializeMicrophone()) {
-    statusDisplayShow("Microphone init failed", "Check Serial Monitor");
-    return;
-  }
+  if (!initializeMicrophone()) return;
   printMemory("before WakeNet");
 
-  statusDisplayShow("Loading Hi ESP...", "Please wait");
-  if (!initializeWakeNet()) {
-    statusDisplayShow("WakeNet init failed", "Check model partition");
-    return;
-  }
+  if (!initializeWakeNet()) return;
 
   Serial.println("WakeNet initialized.");
   printMemory("after WakeNet");
 
   if (!initializeSpeaker()) {
-    statusDisplayShow("Speaker init failed", "Check Serial Monitor");
     return;
   }
 
@@ -528,22 +566,31 @@ void setup() {
       MAX_RECORD_SAMPLES * sizeof(int16_t), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
   if (recording == nullptr) {
     Serial.println("Could not allocate the recording buffer in PSRAM.");
-    statusDisplayShow("Not enough memory", "Recording buffer failed");
     return;
   }
   printMemory("after audio buffers");
 
   ready = true;
-  statusDisplayShow("Say: Hi ESP", "Ready");
   Serial.printf("Ready. Say 'Hi ESP' (using the %s microphone slot).\n",
                 MIC_IS_LEFT_CHANNEL ? "left" : "right");
 }
 
 void loop() {
-  statusDisplayPoll();
   if (!ready) {
     delay(1000);
     return;
+  }
+
+  if (WiFi.status() != WL_CONNECTED) {
+    Serial.println("Wi-Fi connection lost; starting reconnection/setup.");
+    recognitionPaused = true;
+    if (!connectWiFi()) {
+      delay(1000);
+      return;
+    }
+    afeHandle->reset_buffer(afeData);
+    recognitionPaused = false;
+    conversationActive = false;
   }
 
   if (!recordRequested) {
@@ -552,28 +599,17 @@ void loop() {
   }
 
   recordRequested = false;
-  statusDisplayShow(conversationActive ? "Listening" : "ESP called",
-                    conversationActive ? "Ask another question" : "Hi ESP detected");
   const uint32_t pauseStart = millis();
   while (!feedTaskPaused && millis() - pauseStart < 1500) {
     delay(5);
   }
   if (!feedTaskPaused) {
     Serial.println("WakeNet feed task did not pause in time.");
-    statusDisplayShow("Microphone busy", "Try Hi ESP again");
     recognitionPaused = false;
     return;
   }
 
-  // The API scopes its conversation history by session_id. Start a fresh
-  // session on each wake-word conversation; retain it for follow-ups.
-  if (!conversationActive) {
-    const uint64_t mac = ESP.getEfuseMac();
-    snprintf(sessionId, sizeof(sessionId), "esp32-%04X%08X-%lu",
-             static_cast<uint16_t>(mac >> 32), static_cast<uint32_t>(mac),
-             static_cast<unsigned long>(++conversationNumber));
-    Serial.printf("Voice server session: %s\n", sessionId);
-  }
+  if (!conversationActive) resetServerConversation();
   const size_t sampleCount = recordUtterance(
       conversationActive ? FOLLOW_UP_WAIT_MS : WAIT_FOR_SPEECH_MS);
   if (sampleCount == 0) {
@@ -586,11 +622,9 @@ void loop() {
   delay(250);
   afeHandle->reset_buffer(afeData);
   if (conversationActive) {
-    statusDisplayShow("Listening", "Ask another question");
     Serial.println("Listening for a follow-up...");
     recordRequested = true;
   } else {
-    statusDisplayShow("Say: Hi ESP", "Ready");
     recognitionPaused = false;
     Serial.println("Ready. Say 'Hi ESP'.");
   }

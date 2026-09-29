@@ -69,22 +69,31 @@ export function createApp({
         signal: controller.signal,
         body: JSON.stringify({
           model,
+          stream: true,
           // Voice AI owns RAG and retains only the recent turns it needs.
           messages: messages.slice(-30).map(({ role, content }) => ({ role, content })),
         }),
         },
       );
-      const data = await upstream.json().catch(() => ({}));
       if (!upstream.ok) {
+        const data = await upstream.json().catch(() => ({}));
         return res.status(upstream.status).json({
           error: data.detail || data.error || "Voice AI chat request failed.",
         });
       }
-      const answer = data.choices?.[0]?.message?.content;
-      if (typeof answer !== "string" || !answer.trim()) {
-        return res.status(502).json({ error: "Voice AI returned an empty response." });
+      if (!upstream.body) return res.status(502).json({ error: "Voice AI returned an empty stream." });
+      res.status(200).set({
+        "Content-Type": "text/event-stream; charset=utf-8",
+        "Cache-Control": "no-cache, no-transform",
+        "X-Accel-Buffering": "no",
+      });
+      const reader = upstream.body.getReader();
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        res.write(value);
       }
-      res.json({ choices: [{ message: { role: "assistant", content: answer } }] });
+      res.end();
     } catch (error) {
       if (!res.destroyed) {
         res.status(503).json({

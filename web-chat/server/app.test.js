@@ -41,9 +41,9 @@ test("forwards text chat to Voice AI without STT or TTS", async (t) => {
     const body = JSON.parse(init.body);
     assert.equal(body.model, "dq-assistant:latest");
     assert.deepEqual(body.messages, [{ role: "user", content: "Xin chào" }]);
-    assert.equal(body.stream, undefined);
-    return Response.json({
-      choices: [{ message: { role: "assistant", content: "Chào bạn!" } }],
+    assert.equal(body.stream, true);
+    return new Response('data: {"delta":"Chào bạn!"}\n\ndata: [DONE]\n\n', {
+      headers: { "Content-Type": "text/event-stream" },
     });
   });
   const response = await fetch(url + "/api/chat", {
@@ -56,8 +56,8 @@ test("forwards text chat to Voice AI without STT or TTS", async (t) => {
   });
   assert.equal(response.status, 200);
   assert.equal(
-    (await response.json()).choices[0].message.content,
-    "Chào bạn!",
+    await response.text(),
+    'data: {"delta":"Chào bạn!"}\n\ndata: [DONE]\n\n',
   );
 });
 

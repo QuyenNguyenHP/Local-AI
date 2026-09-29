@@ -1,4 +1,5 @@
 import base64
+import json
 from time import perf_counter
 from uuid import uuid4
 from .progress import log, request_id
@@ -7,7 +8,7 @@ from contextlib import asynccontextmanager
 import httpx
 from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse, Response
+from fastapi.responses import JSONResponse, Response, StreamingResponse
 from pydantic import BaseModel, Field
 
 from .config import Settings, get_settings
@@ -23,6 +24,7 @@ class SpeechRequest(BaseModel):
 class ChatRequest(BaseModel):
     messages: list[dict[str, str]] = Field(min_length=1, max_length=30)
     model: str | None = None
+    stream: bool = False
 
 
 def require_api_key(authorization: str | None = Header(default=None), settings: Settings = Depends(get_settings)):
@@ -53,7 +55,12 @@ async def lifespan(app: FastAPI):
         await services["stt"].transcribe(wav, "vi" if is_vietnamese_tts else "en")
         # Warmup must work with a vision/text model too; it does not need to
         # exercise optional physical-action tools.
-        await services["chat"].complete([{"role": "user", "content": "Reply with only the word Ready."}], allow_tools=False)
+        try:
+            await services["chat"].complete([{"role": "user", "content": "Reply with only the word Ready."}], allow_tools=False)
+        except (httpx.HTTPError, ValueError) as exc:
+            # A model warmup failure must not take down the HTTP server. The
+            # first real request can still surface the upstream model error.
+            log("Model warmup | Ollama chat warmup skipped: %s", exc)
         log("Model warmup | ready after %.2fs", perf_counter() - start)
     yield
 
@@ -109,6 +116,15 @@ async def speech(body: SpeechRequest, services=Depends(get_services)):
 async def chat(body: ChatRequest, services=Depends(get_services)):
     if any(message.get("role") not in {"system", "user", "assistant"} or not isinstance(message.get("content"), str) for message in body.messages):
         raise HTTPException(422, "Each message needs role (system/user/assistant) and string content")
+    if body.stream:
+        async def events():
+            try:
+                async for delta in services["chat"].stream_complete(body.messages, body.model):
+                    yield f"data: {json.dumps({'delta': delta}, ensure_ascii=False)}\n\n"
+                yield "data: [DONE]\n\n"
+            except (httpx.HTTPError, ValueError) as exc:
+                yield f"data: {json.dumps({'error': str(exc)}, ensure_ascii=False)}\n\n"
+        return StreamingResponse(events(), media_type="text/event-stream", headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
     try:
         answer = await services["chat"].complete(body.messages, body.model)
     except (httpx.HTTPError, ValueError) as exc:

@@ -484,6 +484,7 @@ Clients do not send model weights. The server loads faster-whisper weights only 
 | `OLLAMA_TIMEOUT_SECONDS` | Number  | `120`                    | Maximum wait for Ollama.                                                       |
 | `OLLAMA_NUM_CTX`         | Integer | `4096`                   | Context window in tokens.                                                      |
 | `OLLAMA_NUM_PREDICT`     | Integer | `1024`                   | Maximum generated tokens.                                                       |
+| `OLLAMA_THINK`           | Boolean | `false`                  | Enable Ollama thinking output for models that support it.                       |
 | `OLLAMA_KEEP_ALIVE`      | String  | `30m`                    | Requested model retention time after a request.                                |
 | `KOKORO_LANG_CODE`       | String  | `a`                      | Kokoro pipeline language code.                                                 |
 | `KOKORO_VOICE`           | String  | `af_heart`               | Default TTS voice.                                                             |

@@ -16,26 +16,71 @@ from .tools.registry import ToolRegistry
 from time import perf_counter
 
 
+def _is_cuda_oom(exc: BaseException) -> bool:
+    """Recognise CUDA allocation failures without treating ordinary errors as retryable."""
+    message = str(exc).lower()
+    return (
+        "out of memory" in message and ("cuda" in message or "cudnn" in message)
+    ) or "cublas_status_alloc_failed" in message
+
+
+def _clear_cuda_cache() -> None:
+    try:
+        import torch
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+    except Exception:
+        pass
+
+
 class SpeechToText:
     """Lazy model loader so the HTTP server can start before models download."""
 
     def __init__(self, settings: Settings):
         self.settings = settings
         self._model = None
+        self._device: str | None = None
         self._lock = asyncio.Lock()
 
     async def _get_model(self):
         async with self._lock:
             if self._model is None:
-                log("Loading Whisper | model=%s device=%s compute=%s", self.settings.whisper_model, self.settings.whisper_device, self.settings.whisper_compute_type)
+                if self.settings.whisper_device == "auto":
+                    import torch
+                    device = "cuda" if torch.cuda.is_available() else "cpu"
+                else:
+                    device = self.settings.whisper_device
+                log("Loading Whisper | model=%s device=%s compute=%s", self.settings.whisper_model, device, self.settings.whisper_compute_type)
                 from faster_whisper import WhisperModel
-                self._model = await asyncio.to_thread(
-                    WhisperModel,
-                    self.settings.whisper_model,
-                    device=self.settings.whisper_device,
-                    compute_type=self.settings.whisper_compute_type,
-                )
+                try:
+                    self._model = await asyncio.to_thread(
+                        WhisperModel,
+                        self.settings.whisper_model,
+                        device=device,
+                        compute_type=self.settings.whisper_compute_type,
+                    )
+                except Exception as exc:
+                    if device != "cuda" or not _is_cuda_oom(exc):
+                        raise
+                    log("Whisper | CUDA out of memory during load; falling back to CPU")
+                    _clear_cuda_cache()
+                    device = "cpu"
+                    self._model = await asyncio.to_thread(
+                        WhisperModel, self.settings.whisper_model, device="cpu", compute_type="int8"
+                    )
+                self._device = device
             return self._model
+
+    async def _fallback_to_cpu(self):
+        async with self._lock:
+            if self._device != "cuda":
+                return
+            log("Whisper | CUDA out of memory; retrying on CPU")
+            self._model = None
+            self._device = "cpu"
+            _clear_cuda_cache()
+            from faster_whisper import WhisperModel
+            self._model = await asyncio.to_thread(WhisperModel, self.settings.whisper_model, device="cpu", compute_type="int8")
 
     @stage("Whisper: audio -> text")
     async def transcribe(self, audio: bytes, language: str | None = None) -> tuple[str, str | None]:
@@ -47,7 +92,14 @@ class SpeechToText:
             )
             return " ".join(segment.text.strip() for segment in segments).strip(), info.language
 
-        result = await asyncio.to_thread(run)
+        try:
+            result = await asyncio.to_thread(run)
+        except Exception as exc:
+            if self._device != "cuda" or not _is_cuda_oom(exc):
+                raise
+            await self._fallback_to_cpu()
+            model = self._model
+            result = await asyncio.to_thread(run)
         log("Whisper | language=%s, text=%d characters", result[1], len(result[0]))
         return result
 
@@ -56,16 +108,19 @@ class TextToSpeech:
     def __init__(self, settings: Settings):
         self.settings = settings
         self._pipeline = None
+        self._device: str | None = None
+        self._force_cpu = False
         self._lock = asyncio.Lock()
 
     async def _get_pipeline(self):
         async with self._lock:
             if self._pipeline is None:
+                requested_device = "cpu" if self._force_cpu else self.settings.kokoro_vi_device
+                if requested_device == "auto":
+                    import torch
+                    requested_device = "cuda" if torch.cuda.is_available() else "cpu"
                 if self.settings.tts_language == "vi":
-                    device = self.settings.kokoro_vi_device
-                    if device == "auto":
-                        import torch
-                        device = "cuda" if torch.cuda.is_available() else "cpu"
+                    device = requested_device
                     if device not in {"cpu", "cuda"}:
                         raise ValueError("KOKORO_VI_DEVICE must be auto, cpu, or cuda")
                     log("Loading Kokoro Vietnamese model | device=%s", device)
@@ -80,10 +135,23 @@ class TextToSpeech:
                     warnings.filterwarnings("ignore", message="dropout option adds dropout after all but last recurrent layer.*", category=UserWarning, module=r"torch\.nn\.modules\.rnn")
                     warnings.filterwarnings("ignore", message=r"`torch\.nn\.utils\.weight_norm` is deprecated.*", category=FutureWarning, module=r"torch\.nn\.utils\.weight_norm")
                     from kokoro import KPipeline
-                    self._pipeline = await asyncio.to_thread(KPipeline, lang_code=self.settings.kokoro_lang_code, repo_id="hexgrad/Kokoro-82M")
+                    # KPipeline defaults to CUDA when available; select explicitly
+                    # so the same fallback works for English and Vietnamese TTS.
+                    self._pipeline = await asyncio.to_thread(KPipeline, lang_code=self.settings.kokoro_lang_code, repo_id="hexgrad/Kokoro-82M", device=requested_device)
                 else:
                     raise ValueError("TTS_LANGUAGE must be en or vi")
+                self._device = requested_device
             return self._pipeline
+
+    async def _fallback_to_cpu(self):
+        async with self._lock:
+            if self._device != "cuda":
+                return
+            log("Kokoro | CUDA out of memory; retrying on CPU")
+            self._pipeline = None
+            self._force_cpu = True
+            self._device = None
+            _clear_cuda_cache()
 
     @stage("Kokoro: text -> audio")
     async def synthesize(self, text: str, voice: str | None = None, speed: float = 1.0) -> bytes:
@@ -113,7 +181,14 @@ class TextToSpeech:
             sf.write(output, np.concatenate(pieces), 24000, format="WAV", subtype="PCM_16")
             return output.getvalue()
 
-        wav = await asyncio.to_thread(run)
+        try:
+            wav = await asyncio.to_thread(run)
+        except Exception as exc:
+            if self._device != "cuda" or not _is_cuda_oom(exc):
+                raise
+            await self._fallback_to_cpu()
+            pipeline = await self._get_pipeline()
+            wav = await asyncio.to_thread(run)
         log("Kokoro | voice=%s, WAV=%d bytes", selected_voice, len(wav))
         return wav
 
@@ -133,12 +208,6 @@ class OllamaChat:
         log("Knowledge lookup | question=%d characters", len(latest_question))
         context = await build_context(latest_question, self.rag)
         log("Knowledge lookup | completed in %.2fs, prompt=%d characters", perf_counter() - start, len(context))
-        context = (
-            "Answer clearly and with enough detail to fully address the question. "
-            "Keep simple answers concise, but for technical or complex questions provide "
-            "a structured explanation, practical steps, important caveats, and useful examples. "
-            + context
-        )
         latest_message: dict[str, Any] = {"role": "user", "content": context}
         image = messages[-1].get("image")
         if isinstance(image, bytes):
@@ -155,7 +224,7 @@ class OllamaChat:
             "stream": False,
             # The voice API needs a spoken answer, not a response that spends
             # the entire token budget on Qwen's hidden reasoning field.
-            "think": False,
+            "think": self.settings.ollama_think,
             "keep_alive": self.settings.ollama_keep_alive,
             "options": {"temperature": 0.6, "num_ctx": self.settings.ollama_num_ctx, "num_predict": self.settings.ollama_num_predict},
         }
@@ -196,6 +265,70 @@ class OllamaChat:
             raise ValueError("Ollama returned an empty answer")
         log("Ollama | completed in %.2fs, answer=%d characters", perf_counter() - start, len(answer))
         return answer
+
+    async def stream_complete(self, messages: list[dict[str, Any]], model: str | None = None):
+        """Yield answer text from Ollama as it arrives.
+
+        A tool call is deliberately buffered: physical actions must complete
+        before any confirmation is sent to the browser.
+        """
+        latest_question = messages[-1]["content"]
+        context = await build_context(latest_question, self.rag)
+        enriched_messages = [*messages[:-1][-10:], {"role": "user", "content": context}]
+        payload = {
+            "model": model or self.settings.ollama_model,
+            "messages": enriched_messages,
+            "stream": True,
+            "think": self.settings.ollama_think,
+            "keep_alive": self.settings.ollama_keep_alive,
+            "options": {"temperature": 0.6, "num_ctx": self.settings.ollama_num_ctx, "num_predict": self.settings.ollama_num_predict},
+        }
+        tool_definitions = self.tools.definitions()
+        if tool_definitions:
+            payload["tools"] = tool_definitions
+        timeout = httpx.Timeout(self.settings.ollama_timeout_seconds)
+        assistant_message: dict[str, Any] = {"role": "assistant", "content": ""}
+        content_sent = False
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            async with client.stream("POST", self.settings.ollama_url.rstrip("/") + "/api/chat", json=payload) as response:
+                response.raise_for_status()
+                async for line in response.aiter_lines():
+                    if not line:
+                        continue
+                    event = json.loads(line)
+                    message = event.get("message", {})
+                    content = message.get("content", "")
+                    if content:
+                        assistant_message["content"] += content
+                        content_sent = True
+                        yield content
+                    if message.get("tool_calls"):
+                        assistant_message["tool_calls"] = message["tool_calls"]
+        tool_calls = assistant_message.get("tool_calls", [])
+        if not tool_calls:
+            # Some model/template combinations complete a streaming request
+            # without emitting message.content. Do not leave the browser with
+            # an empty assistant bubble; retry through the proven JSON path.
+            if not content_sent:
+                log("Ollama stream | no content received; retrying non-stream response")
+                yield await self.complete(messages, model)
+            return
+        if len(tool_calls) != 1:
+            raise ValueError("Only one Home Assistant action may be requested at a time")
+        call = tool_calls[0].get("function", {})
+        result = await self.tools.execute(call.get("name", ""), call.get("arguments"))
+        follow_up = {
+            **payload,
+            "stream": False,
+            "messages": [*enriched_messages, assistant_message, {"role": "tool", "content": result}],
+        }
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            response = await client.post(self.settings.ollama_url.rstrip("/") + "/api/chat", json=follow_up)
+            response.raise_for_status()
+        answer = response.json().get("message", {}).get("content", "").strip()
+        if not answer:
+            raise ValueError("Ollama returned an empty answer")
+        yield answer
 
 
 class SessionStore:

@@ -52,6 +52,27 @@ async function readResponse(response) {
     throw new Error(`Server returned an invalid response (HTTP ${response.status}).`);
   }
 }
+async function readStream(response, onDelta) {
+  if (!response.body) throw new Error("Server returned an empty stream.");
+  const reader = response.body.getReader(), decoder = new TextDecoder();
+  let pending = "";
+  while (true) {
+    const { done, value } = await reader.read();
+    pending += decoder.decode(value || new Uint8Array(), { stream: !done });
+    const events = pending.split("\n\n");
+    pending = events.pop();
+    for (const event of events) {
+      const line = event.split("\n").find((item) => item.startsWith("data: "));
+      if (!line) continue;
+      const data = line.slice(6);
+      if (data === "[DONE]") return;
+      const payload = JSON.parse(data);
+      if (payload.error) throw new Error(payload.error);
+      if (payload.delta) onDelta(payload.delta);
+    }
+    if (done) break;
+  }
+}
 function App() {
   const [session, setSession] = useState(() => window.localStorage.getItem("dq-ai-session"));
   const [chats, setChats] = useState(readChats),
@@ -206,12 +227,20 @@ function App() {
               messages: history.slice(-40).map(({ role, content }) => ({ role, content })),
             }),
           });
-      const data = await readResponse(response);
       if (!response.ok) {
+        const data = await readResponse(response);
         throw new Error(data.error || "Request failed");
       }
-      answer = data.choices?.[0]?.message?.content || "";
-      updateMessage(id, answerId, answer);
+      if (image) {
+        const data = await readResponse(response);
+        answer = data.choices?.[0]?.message?.content || "";
+        updateMessage(id, answerId, answer);
+      } else {
+        await readStream(response, (delta) => {
+          answer += delta;
+          updateMessage(id, answerId, answer);
+        });
+      }
       if (!answer.trim())
         throw new Error(
           "The model returned an empty response. Please try again.",

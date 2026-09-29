@@ -2,34 +2,39 @@
 
 This Arduino sketch targets the ESP32-S3-Touch-LCD-1.85C V1 pinout used by
 `speaker_mic_test` and `audio_out_no_tf`. It detects **Hi ESP** locally, records
-16 kHz mono PCM WAV, sends it over Wi-Fi to the Voice AI server, and streams the
-returned WAV response to the PCM5101 speaker. After each answer it listens for a
+16 kHz mono PCM, sends it over Wi-Fi to the Python bridge, and streams the
+Piper WAV response to the PCM5101 speaker. After each answer it listens for a
 follow-up for eight seconds, so the wake phrase is only needed to start a new
 conversation.
 
 The computer pipeline is:
 
 ```text
-ESP32 WakeNet -> WAV/multipart HTTP -> faster-whisper -> Qdrant RAG -> Ollama -> Kokoro -> WAV/HTTP -> ESP32
+ESP32 WakeNet -> PCM/HTTP -> faster-whisper -> Ollama -> Piper -> WAV/HTTP -> ESP32
 ```
 
-## Start the Voice AI server
+## Start the computer bridge
 
-From the Voice AI project, start the server as documented there:
+From the voice assistant project, load the existing environment and run:
 
 ```bash
-cd "/home/dq/Local AI/voice_ai_server"
-../.venv/bin/python run.py
+cd "/home/dq/Local _Voice_Assistant/voice_assistant"
+source .venv/bin/activate
+set -a
+source .env
+set +a
+python server.py
 ```
 
-The server listens on TCP port 8000. Test it locally with:
+The bridge listens on TCP port 8765. Test it locally with:
 
 ```bash
-curl http://127.0.0.1:8000/healthz
+curl http://127.0.0.1:8765/health
 ```
 
-Allow TCP port 8000 through the computer firewall if one is enabled. Ollama and
-Qdrant can remain private; only this HTTP server needs to be reachable by the ESP32.
+Allow TCP port 8765 through the computer firewall if one is enabled. Ollama
+can remain bound to `127.0.0.1`; only this bridge needs to be reachable by the
+ESP32.
 
 ## Configure Wi-Fi
 
@@ -39,12 +44,31 @@ computer's LAN address:
 ```cpp
 #define WIFI_SSID "your-wifi-name"
 #define WIFI_PASSWORD "your-wifi-password"
-#define VOICE_SERVER_URL "http://192.168.1.100:8000/v1/voice/chat"
-#define VOICE_SERVER_API_KEY ""
+#define VOICE_SERVER_URL "http://192.168.1.100:8765/v1/conversation"
 ```
 
 Do not use `127.0.0.1` in the sketch: on the ESP32 that address means the ESP32
 itself. Keep `secrets.h` private.
+
+### Configure Wi-Fi from a phone or laptop
+
+At startup the ESP32 first tries credentials previously saved in flash, then
+the fallback credentials in `secrets.h`. If neither connects, it starts this
+setup access point:
+
+```text
+Network:  ESP32-Voice-Setup
+Password: configureme
+Address:  http://192.168.4.1
+```
+
+Connect a phone or laptop to that network. The setup page should open
+automatically; otherwise browse to `http://192.168.4.1`. Select the home Wi-Fi,
+enter its password, and press **Save and connect**. Successful credentials are
+stored in ESP32 flash and used first on future boots.
+
+Uploading new firmware normally preserves the saved credentials. Erasing all
+flash clears them and causes the setup access point to appear again.
 
 ## Detailed Arduino IDE setup
 
@@ -168,16 +192,16 @@ Wake word detected. Speak now.
 Recording...
 Speech started.
 Recorded 2.15 seconds.
-Uploading 2.15 seconds of WAV audio...
-Playing AI response at 24000 Hz...
+Uploading 2.15 seconds of audio...
+You: What time is it?
+Assistant: ...
+Playing AI response at 22050 Hz...
 Listening for a follow-up...
 ```
 
-If `API_KEY` is set in `voice_ai_server/.env`, copy its value into
-`VOICE_SERVER_API_KEY`. Speak during the follow-up window to continue with the
-same server-side conversation. After eight seconds without speech it returns to
-WakeNet; the next wake word starts a fresh server session. HTTP failures also
-safely return it to wake mode.
+Speak during the follow-up window to continue with the same Ollama history.
+After eight seconds without speech it returns to WakeNet and the next wake
+starts a fresh history. HTTP failures also safely return it to wake mode.
 
 If the USB port disappears during upload, hold **BOOT**, press and release
 **RESET**, release **BOOT**, select the newly appearing port, and upload again.
@@ -186,7 +210,8 @@ If the USB port disappears during upload, hold **BOOT**, press and release
 
 - Run `speaker_mic_test` first. If its right channel changes when you speak,
   set `MIC_IS_LEFT_CHANNEL` to `false` in the new sketch.
-- If recording stops between words, increase `END_SILENCE_MS`.
+- If recording stops while you pause to think, increase `END_SILENCE_MS`.
+- If quiet words are treated as silence, decrease `SILENCE_THRESHOLD`.
 - If ambient noise prevents recording from stopping, increase
   `SILENCE_THRESHOLD`. If speech is not detected, decrease it.
 - The built-in WakeNet model uses **Hi ESP**. A different phrase requires a
