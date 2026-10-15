@@ -1,0 +1,22 @@
+services:
+  web-chat:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: dq-ai-web-chat
+    network_mode: host
+    init: true
+    restart: unless-stopped
+    environment:
+      HOST: 0.0.0.0
+      PORT: 3001
+      OLLAMA_URL: http://127.0.0.1:11434
+      OLLAMA_MODEL: ${OLLAMA_MODEL:-dq-assistant:latest}
+      VOICE_AI_URL: http://127.0.0.1:8000
+      VOICE_AI_API_KEY: ${VOICE_AI_API_KEY:-}
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--spider", "http://127.0.0.1:3001/"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s

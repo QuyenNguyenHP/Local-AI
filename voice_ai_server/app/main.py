@@ -17,6 +17,7 @@ from .services import OllamaChat, SessionStore, SpeechToText, TextToSpeech
 
 class SpeechRequest(BaseModel):
     text: str = Field(min_length=1, max_length=10_000)
+    language: str | None = None
     voice: str | None = None
     speed: float = Field(default=1.0, ge=0.5, le=2.0)
 
@@ -50,9 +51,10 @@ async def lifespan(app: FastAPI):
         start = perf_counter()
         log("Model warmup | warming up Kokoro, Whisper and Ollama before accepting requests")
         services = app.state.services
-        is_vietnamese_tts = settings.tts_language == "vi"
-        wav = await services["tts"].synthesize("Sẵn sàng." if is_vietnamese_tts else "Ready.")
-        await services["stt"].transcribe(wav, "vi" if is_vietnamese_tts else "en")
+        warmup_text = {"en": "Ready.", "ja": "準備完了です。", "vi": "Sẵn sàng."}
+        for language in sorted(settings.tts_languages):
+            wav = await services["tts"].synthesize(warmup_text[language], language=language)
+            await services["stt"].transcribe(wav, language)
         # Warmup must work with a vision/text model too; it does not need to
         # exercise optional physical-action tools.
         try:
@@ -106,7 +108,7 @@ async def transcriptions(audio: UploadFile = File(...), language: str | None = F
 @app.post("/v1/audio/speech", dependencies=[Depends(require_api_key)])
 async def speech(body: SpeechRequest, services=Depends(get_services)):
     try:
-        wav = await services["tts"].synthesize(body.text, body.voice, body.speed)
+        wav = await services["tts"].synthesize(body.text, body.voice, body.speed, body.language)
     except Exception as exc:
         raise HTTPException(503, f"Speech synthesis failed: {exc}") from exc
     return Response(wav, media_type="audio/wav", headers={"Content-Disposition": "inline; filename=response.wav"})
@@ -173,7 +175,8 @@ async def voice_chat(
         log("Conversation history | %d messages", len(messages))
         answer = await services["chat"].complete(messages, model)
         services["sessions"].save(session_id, transcript, answer)
-        wav = await services["tts"].synthesize(answer, voice)
+        response_language = language or detected_language or services["settings"].tts_language
+        wav = await services["tts"].synthesize(answer, voice, language=response_language)
     except (httpx.HTTPError, ValueError) as exc:
         raise HTTPException(503, f"Voice pipeline failed: {exc}") from exc
     if response_format == "json":

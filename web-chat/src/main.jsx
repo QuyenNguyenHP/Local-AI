@@ -21,6 +21,7 @@ import { BrandMark, MessageList, WelcomeScreen } from "./components";
 import LoginPage from "./LoginPage";
 import "./styles.css";
 const KEY = "local-ai-conversations-v1";
+const LANGUAGE_KEY = "dq-ai-response-language";
 function readChats() {
   try {
     const value = JSON.parse(localStorage.getItem(KEY) || "[]");
@@ -81,6 +82,10 @@ function App() {
   const [models, setModels] = useState([]),
     [model, setModel] = useState(""),
     [status, setStatus] = useState("Connecting");
+  const [language, setLanguage] = useState(() => {
+    const saved = window.localStorage.getItem(LANGUAGE_KEY);
+    return saved === "ja" ? "ja" : "en";
+  });
   const [busy, setBusy] = useState(false),
     [error, setError] = useState(""),
     [sidebar, setSidebar] = useState(window.innerWidth > 760),
@@ -135,6 +140,10 @@ function App() {
     loadModels();
     return () => controller.current?.abort();
   }, []);
+  useEffect(() => {
+    window.localStorage.setItem(LANGUAGE_KEY, language);
+    document.documentElement.lang = language;
+  }, [language]);
   useEffect(() => {
     bottom.current?.scrollIntoView({ behavior: busy ? "instant" : "smooth" });
   }, [messages.length, messages.at(-1)?.content]);
@@ -214,7 +223,12 @@ function App() {
         ? await (() => {
             const form = new FormData();
             form.append("image", image);
-            form.append("prompt", imagePrompt);
+            form.append(
+              "prompt",
+              language === "ja"
+                ? `日本語で回答してください。\n\n${imagePrompt}`
+                : `Answer in English.\n\n${imagePrompt}`,
+            );
             form.append("model", model);
             return fetch("/api/images/chat", { method: "POST", body: form, signal: controller.current.signal });
           })()
@@ -224,6 +238,7 @@ function App() {
             signal: controller.current.signal,
             body: JSON.stringify({
               model,
+              language,
               messages: history.slice(-40).map(({ role, content }) => ({ role, content })),
             }),
           });
@@ -436,6 +451,18 @@ function App() {
             </select>
             <span>LOCAL MODEL</span>
           </div>
+          <label className="language-control">
+            <span>RESPONSE</span>
+            <select
+              aria-label="Choose response language"
+              value={language}
+              onChange={(event) => setLanguage(event.target.value)}
+              disabled={busy}
+            >
+              <option value="en">English</option>
+              <option value="ja">日本語</option>
+            </select>
+          </label>
           <div className="header-note">
             <span className="status-dot" />
             Private by design

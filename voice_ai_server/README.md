@@ -146,6 +146,8 @@ cd /home/daikai/Local-AI
 python3 -m venv .venv
 source .venv/bin/activate
 python -m pip install -r voice_ai_server/requirements.txt
+# Required once for Japanese Kokoro G2P (downloads about 526 MB):
+python -m unidic download
 cd voice_ai_server
 # Copy only if .env does not already exist:
 [ -f .env ] || cp .env.example .env
@@ -401,13 +403,14 @@ Input: `application/json`.
 | Field     | Type        | Required | Default/limit                     | Description                                                |
 | --------- | ----------- | -------- | --------------------------------- | ---------------------------------------------------------- |
 | `text`  | String      | Yes      | 1-10,000 characters               | Text for Kokoro to speak.                                  |
+| `language` | String/null | No    | `TTS_LANGUAGE`                    | TTS language: `en` or `ja`.                                |
 | `voice` | String/null | No       | `KOKORO_VOICE` (`af_heart`)   | Voice supported by the loaded model.                       |
 | `speed` | Number      | No       | `1.0`, range `0.5` to `2.0` | Speech speed; lower is slower. This is not a model weight. |
 
 ```bash
 curl -X POST http://127.0.0.1:8000/v1/audio/speech \
   -H 'Authorization: Bearer <API_KEY>' -H 'Content-Type: application/json' \
-  -d '{"text":"Hello.","voice":"af_heart","speed":1.0}' \
+  -d '{"text":"Hello.","language":"en","voice":"af_heart","speed":1.0}' \
   --output reply.wav
 ```
 
@@ -422,7 +425,7 @@ Input: `multipart/form-data`.
 | ------------------- | ----------- | -------- | ---------------- | ---------------------------------------------------------------------- |
 | `audio`           | Binary file | Yes      | None             | Recorded speech.                                                       |
 | `session_id`      | String      | No       | `default`      | Conversation ID. Use a separate ID per device to avoid mixing history. |
-| `language`        | String/null | No       | `null`         | Whisper language code, or omit for automatic detection.                |
+| `language`        | String/null | No       | `null`         | Conversation language. Use `en` or `ja`; it selects both Whisper STT and Kokoro TTS. Omit for automatic STT detection. |
 | `voice`           | String/null | No       | `KOKORO_VOICE` | Response voice.                                                        |
 | `model`           | String/null | No       | `OLLAMA_MODEL` | Model override for this request.                                       |
 | `response_format` | String      | No       | `audio`        | Either`audio` or `json`.                                           |
@@ -488,7 +491,9 @@ Clients do not send model weights. The server loads faster-whisper weights only 
 | `OLLAMA_KEEP_ALIVE`      | String  | `30m`                    | Requested model retention time after a request.                                |
 | `KOKORO_LANG_CODE`       | String  | `a`                      | Kokoro pipeline language code.                                                 |
 | `KOKORO_VOICE`           | String  | `af_heart`               | Default TTS voice.                                                             |
-| `TTS_LANGUAGE`           | String  | `en`                     | TTS backend:`en` for Kokoro-82M, or `vi` for Kokoro-Vietnamese.            |
+| `KOKORO_JA_VOICE`        | String  | `jf_alpha`               | Default Japanese TTS voice.                                                    |
+| `TTS_LANGUAGES`          | CSV     | `en,ja`                  | Languages enabled for per-request speech synthesis.                            |
+| `TTS_LANGUAGE`           | String  | `en`                     | Fallback TTS language when a request omits `language`.                         |
 | `KOKORO_VI_DEVICE`       | String  | `auto`                   | Vietnamese backend device:`auto`, `cpu`, or `cuda`.                      |
 | `MAX_AUDIO_BYTES`        | Integer | `26214400`               | Maximum upload size in bytes.                                                  |
 | `MAX_HISTORY_MESSAGES`   | Integer | `12`                     | Messages retained in memory per session.                                       |
@@ -504,6 +509,7 @@ the server:
 
 ```env
 TTS_LANGUAGE=vi
+TTS_LANGUAGES=vi
 KOKORO_VOICE=diem_trinh
 KOKORO_VI_DEVICE=auto
 ```
@@ -529,6 +535,51 @@ first use. Its current runtime does not expose the API's `speed` control;
 Set `API_KEY` in `.env` and send it as a bearer token. For production, use HTTPS through Nginx/Caddy, restrict `CORS_ORIGINS` to specific domains, and replace in-memory sessions with Redis or a database when using multiple instances.
 
 The default Kokoro voice (`af_heart`) speaks English. For other languages, use a supported voice/model or replace the TTS backend.
+
+### English and Japanese voice conversations
+
+The server can select English or Japanese for each request. Install the Japanese
+G2P dependencies and dictionary once:
+
+```bash
+cd /home/daikai/Local-AI
+.venv/bin/python -m pip install 'misaki[ja]>=0.9.4,<1.0'
+.venv/bin/python -m unidic download
+```
+
+Configure `voice_ai_server/.env`:
+
+```dotenv
+TTS_LANGUAGE=en
+TTS_LANGUAGES=en,ja
+KOKORO_LANG_CODE=a
+KOKORO_VOICE=af_heart
+KOKORO_JA_VOICE=jf_alpha
+```
+
+English request:
+
+```bash
+curl -X POST http://SERVER_IP:8000/v1/voice/chat \
+  -H 'Authorization: Bearer <API_KEY>' \
+  -F 'audio=@english.wav' -F 'language=en' \
+  -F 'session_id=english-client' --output english-reply.wav
+```
+
+Japanese request:
+
+```bash
+curl -X POST http://SERVER_IP:8000/v1/voice/chat \
+  -H 'Authorization: Bearer <API_KEY>' \
+  -F 'audio=@japanese.wav' -F 'language=ja' \
+  -F 'session_id=japanese-client' --output japanese-reply.wav
+```
+
+`language=en` uses `af_heart`; `language=ja` uses `jf_alpha`. An explicit
+`voice` form field can override the default, but its language prefix must match:
+English voices start with `a`, and Japanese voices start with `j`. Available
+Japanese Kokoro voices include `jf_alpha`, `jf_gongitsune`, `jf_nezumi`,
+`jf_tebukuro`, and `jm_kumo`.
 
 ## Faster response settings
 

@@ -104,64 +104,98 @@ class SpeechToText:
         return result
 
 
+TTS_LANGUAGE_ALIASES = {
+    "en": "en", "en-us": "en", "en-gb": "en",
+    "ja": "ja", "jp": "ja", "jpn": "ja",
+    "vi": "vi",
+}
+
+
+def normalize_tts_language(language: str) -> str:
+    normalized = TTS_LANGUAGE_ALIASES.get(language.strip().lower())
+    if not normalized:
+        raise ValueError(f"TTS language '{language}' is not supported; use en or ja")
+    return normalized
+
+
 class TextToSpeech:
     def __init__(self, settings: Settings):
         self.settings = settings
-        self._pipeline = None
+        self._pipelines: dict[str, Any] = {}
         self._device: str | None = None
         self._force_cpu = False
         self._lock = asyncio.Lock()
 
-    async def _get_pipeline(self):
+    def default_voice(self, language: str) -> str:
+        language = normalize_tts_language(language)
+        if language == "ja":
+            return self.settings.kokoro_ja_voice
+        return self.settings.kokoro_voice
+
+    async def _get_pipeline(self, language: str):
+        language = normalize_tts_language(language)
+        if language not in self.settings.tts_languages:
+            enabled = ", ".join(sorted(self.settings.tts_languages))
+            raise ValueError(f"TTS language '{language}' is disabled; enabled languages: {enabled}")
         async with self._lock:
-            if self._pipeline is None:
+            if language not in self._pipelines:
                 requested_device = "cpu" if self._force_cpu else self.settings.kokoro_vi_device
                 if requested_device == "auto":
                     import torch
                     requested_device = "cuda" if torch.cuda.is_available() else "cpu"
-                if self.settings.tts_language == "vi":
+                if language == "vi":
                     device = requested_device
                     if device not in {"cpu", "cuda"}:
                         raise ValueError("KOKORO_VI_DEVICE must be auto, cpu, or cuda")
                     log("Loading Kokoro Vietnamese model | device=%s", device)
                     from kokoro_vietnamese import KokoroVietnamese
-                    self._pipeline = await asyncio.to_thread(
+                    self._pipelines[language] = await asyncio.to_thread(
                         KokoroVietnamese, device=device, voice=self.settings.kokoro_voice
                     )
-                elif self.settings.tts_language == "en":
-                    log("Loading Kokoro English model | language=%s", self.settings.kokoro_lang_code)
+                else:
+                    lang_code = self.settings.kokoro_lang_code if language == "en" else "j"
+                    log("Loading Kokoro model | language=%s code=%s", language, lang_code)
                     import warnings
                     # Known upstream warnings only; retain other warnings and errors.
                     warnings.filterwarnings("ignore", message="dropout option adds dropout after all but last recurrent layer.*", category=UserWarning, module=r"torch\.nn\.modules\.rnn")
                     warnings.filterwarnings("ignore", message=r"`torch\.nn\.utils\.weight_norm` is deprecated.*", category=FutureWarning, module=r"torch\.nn\.utils\.weight_norm")
                     from kokoro import KPipeline
-                    # KPipeline defaults to CUDA when available; select explicitly
-                    # so the same fallback works for English and Vietnamese TTS.
-                    self._pipeline = await asyncio.to_thread(KPipeline, lang_code=self.settings.kokoro_lang_code, repo_id="hexgrad/Kokoro-82M", device=requested_device)
-                else:
-                    raise ValueError("TTS_LANGUAGE must be en or vi")
+                    # Reuse one Kokoro model across the English and Japanese
+                    # language-specific G2P pipelines to avoid duplicate VRAM.
+                    shared_model = next(
+                        (pipeline.model for key, pipeline in self._pipelines.items() if key in {"en", "ja"}),
+                        True,
+                    )
+                    self._pipelines[language] = await asyncio.to_thread(
+                        KPipeline, lang_code=lang_code, repo_id="hexgrad/Kokoro-82M",
+                        model=shared_model, device=requested_device,
+                    )
                 self._device = requested_device
-            return self._pipeline
+            return self._pipelines[language]
 
     async def _fallback_to_cpu(self):
         async with self._lock:
             if self._device != "cuda":
                 return
             log("Kokoro | CUDA out of memory; retrying on CPU")
-            self._pipeline = None
+            self._pipelines.clear()
             self._force_cpu = True
             self._device = None
             _clear_cuda_cache()
 
     @stage("Kokoro: text -> audio")
-    async def synthesize(self, text: str, voice: str | None = None, speed: float = 1.0) -> bytes:
-        pipeline = await self._get_pipeline()
-        selected_voice = voice or self.settings.kokoro_voice
+    async def synthesize(
+        self, text: str, voice: str | None = None, speed: float = 1.0,
+        language: str | None = None,
+    ) -> bytes:
+        selected_language = normalize_tts_language(language or self.settings.tts_language)
+        pipeline = await self._get_pipeline(selected_language)
+        selected_voice = voice or self.default_voice(selected_language)
 
         def run():
             import numpy as np
             import soundfile as sf
-            if self.settings.tts_language == "vi":
+            if selected_language == "vi":
                 # The Vietnamese package has a different inference API and does
                 # not expose Kokoro's speed parameter.
                 if voice and voice != self.settings.kokoro_voice:
@@ -187,9 +221,9 @@ class TextToSpeech:
             if self._device != "cuda" or not _is_cuda_oom(exc):
                 raise
             await self._fallback_to_cpu()
-            pipeline = await self._get_pipeline()
+            pipeline = await self._get_pipeline(selected_language)
             wav = await asyncio.to_thread(run)
-        log("Kokoro | voice=%s, WAV=%d bytes", selected_voice, len(wav))
+        log("Kokoro | language=%s voice=%s, WAV=%d bytes", selected_language, selected_voice, len(wav))
         return wav
 
 

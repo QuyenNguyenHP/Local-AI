@@ -313,6 +313,27 @@ header {
   padding: 4px 6px;
   border-radius: 4px;
 }
+.language-control {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  border-left: 1px solid #34445d;
+  padding-left: 16px;
+}
+.language-control > span {
+  font-size: 8px;
+  letter-spacing: 1px;
+  color: #a9a1bd;
+}
+.language-control select {
+  border: 1px solid #34445d;
+  border-radius: 7px;
+  background: #111020;
+  color: #f6f3ff;
+  padding: 7px 9px;
+  font-size: 12px;
+  cursor: pointer;
+}
 .header-note {
   margin-left: auto;
   display: flex;
@@ -711,6 +732,18 @@ h1 {
   }
   .model-control > span {
     display: none;
+  }
+  .language-control {
+    margin-left: auto;
+    padding-left: 8px;
+  }
+  .language-control > span {
+    display: none;
+  }
+  .language-control select {
+    max-width: 92px;
+    font-size: 13px;
+    padding: 7px 6px;
   }
   .model-control select {
     width: min(58vw, 230px);

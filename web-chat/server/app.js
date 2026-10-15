@@ -30,7 +30,7 @@ export function createApp({
     }
   });
   app.post("/api/chat", async (req, res) => {
-    const { model, messages } = req.body;
+    const { model, messages, language = "en" } = req.body;
     if (
       typeof model !== "string" ||
       !model.trim() ||
@@ -46,7 +46,8 @@ export function createApp({
           !m.content.trim() ||
           m.content.length > 32000,
       ) ||
-      messages.at(-1).role !== "user"
+      messages.at(-1).role !== "user" ||
+      !["en", "ja"].includes(language)
     ) {
       return res
         .status(400)
@@ -71,7 +72,15 @@ export function createApp({
           model,
           stream: true,
           // Voice AI owns RAG and retains only the recent turns it needs.
-          messages: messages.slice(-30).map(({ role, content }) => ({ role, content })),
+          messages: [
+            {
+              role: "system",
+              content: language === "ja"
+                ? "Always answer in Japanese. Keep technical names and code unchanged."
+                : "Always answer in English. Keep technical names and code unchanged.",
+            },
+            ...messages.slice(-29).map(({ role, content }) => ({ role, content })),
+          ],
         }),
         },
       );

@@ -39,10 +39,13 @@ class Settings:
     rag_top_k: int = 5
     rag_score_threshold: float = 0.35
     rag_max_chars: int = 9000
-    # Select the TTS implementation at server startup: "en" or "vi".
+    # Default language for text-only TTS calls. Voice chat uses the request or
+    # Whisper-detected language instead.
     tts_language: str = "en"
+    tts_languages_raw: str = "en,ja"
     kokoro_lang_code: str = "a"
     kokoro_voice: str = "af_heart"
+    kokoro_ja_voice: str = "jf_alpha"
     kokoro_vi_device: str = "auto"
     max_audio_bytes: int = 25 * 1024 * 1024
     max_image_bytes: int = 10 * 1024 * 1024
@@ -60,6 +63,10 @@ class Settings:
     @property
     def ha_allowed_entities(self) -> set[str]:
         return {item.strip() for item in self.ha_allowed_entities_raw.split(",") if item.strip()}
+
+    @property
+    def tts_languages(self) -> set[str]:
+        return {item.strip().lower() for item in self.tts_languages_raw.split(",") if item.strip()}
 
 
 @lru_cache
@@ -82,7 +89,9 @@ def get_settings() -> Settings:
         ollama_num_predict=int(os.getenv("OLLAMA_NUM_PREDICT", "1024")),
         ollama_think=os.getenv("OLLAMA_THINK", "false").lower() in {"1", "true", "yes"},
         tts_language=os.getenv("TTS_LANGUAGE", "en").lower(),
+        tts_languages_raw=os.getenv("TTS_LANGUAGES", "en,ja"),
         kokoro_lang_code=os.getenv("KOKORO_LANG_CODE", "a"), kokoro_voice=os.getenv("KOKORO_VOICE", "af_heart"),
+        kokoro_ja_voice=os.getenv("KOKORO_JA_VOICE", "jf_alpha"),
         kokoro_vi_device=os.getenv("KOKORO_VI_DEVICE", "auto").lower(),
         max_audio_bytes=int(os.getenv("MAX_AUDIO_BYTES", str(25 * 1024 * 1024))),
         max_image_bytes=int(os.getenv("MAX_IMAGE_BYTES", str(10 * 1024 * 1024))),

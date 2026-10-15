@@ -14,7 +14,8 @@ WORKDIR /app
 COPY requirements-gpu.txt requirements.txt ./
 RUN python3 -m venv /opt/venv \
     && pip install --no-cache-dir -r requirements-gpu.txt \
-    && pip install --no-cache-dir -r requirements.txt
+    && pip install --no-cache-dir -r requirements.txt \
+    && python -m unidic download
 
 COPY . ./
 EXPOSE 8000

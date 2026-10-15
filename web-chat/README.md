@@ -38,10 +38,29 @@ Optional shell environment variables:
 
 Example: `OLLAMA_MODEL=gemma3:4b npm start`
 
+## Docker
+
+On Linux, the Compose service uses host networking so it can reach Ollama and
+Voice AI on the host loopback interface. Make sure ports 3001, 8000, and 11434
+are available as described above, then run:
+
+```bash
+docker compose up -d --build
+docker compose ps
+```
+
+Open `http://localhost:3001`. To update or stop the deployment:
+
+```bash
+docker compose up -d --build
+docker compose down
+```
+
 ## Features
 
 - Streaming answers, conversation context, and stop generation
 - Installed model selection and connection status
+- English or Japanese response-language selection
 - New conversations, search, deletion, and browser-local history
 - Markdown, code blocks, tables, and copy response
 - Responsive sidebar, keyboard sending, and Vietnamese input

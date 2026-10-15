@@ -35,12 +35,15 @@ test("rejects invalid conversation payloads without calling Voice AI", async (t)
   assert.equal(response.status, 400);
 });
 
-test("forwards text chat to Voice AI without STT or TTS", async (t) => {
+test("forwards English text chat to Voice AI without STT or TTS", async (t) => {
   const url = await server(t, async (upstreamUrl, init) => {
     assert.equal(upstreamUrl, "http://voice-ai.test:8000/v1/chat/completions");
     const body = JSON.parse(init.body);
     assert.equal(body.model, "dq-assistant:latest");
-    assert.deepEqual(body.messages, [{ role: "user", content: "Xin chào" }]);
+    assert.deepEqual(body.messages, [
+      { role: "system", content: "Always answer in English. Keep technical names and code unchanged." },
+      { role: "user", content: "Xin chào" },
+    ]);
     assert.equal(body.stream, true);
     return new Response('data: {"delta":"Chào bạn!"}\n\ndata: [DONE]\n\n', {
       headers: { "Content-Type": "text/event-stream" },
@@ -51,6 +54,7 @@ test("forwards text chat to Voice AI without STT or TTS", async (t) => {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
       model: "dq-assistant:latest",
+      language: "en",
       messages: [{ role: "user", content: "Xin chào" }],
     }),
   });
@@ -59,6 +63,44 @@ test("forwards text chat to Voice AI without STT or TTS", async (t) => {
     await response.text(),
     'data: {"delta":"Chào bạn!"}\n\ndata: [DONE]\n\n',
   );
+});
+
+test("adds a Japanese response instruction", async (t) => {
+  const url = await server(t, async (_upstreamUrl, init) => {
+    const body = JSON.parse(init.body);
+    assert.deepEqual(body.messages, [
+      { role: "system", content: "Always answer in Japanese. Keep technical names and code unchanged." },
+      { role: "user", content: "What is RAG?" },
+    ]);
+    return new Response('data: {"delta":"RAGとは"}\n\ndata: [DONE]\n\n');
+  });
+  const response = await fetch(url + "/api/chat", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      model: "dq-assistant:latest",
+      language: "ja",
+      messages: [{ role: "user", content: "What is RAG?" }],
+    }),
+  });
+  assert.equal(response.status, 200);
+  assert.match(await response.text(), /RAGとは/);
+});
+
+test("rejects unsupported response languages", async (t) => {
+  const url = await server(t, () => {
+    throw new Error("Must not call upstream");
+  });
+  const response = await fetch(url + "/api/chat", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      model: "dq-assistant:latest",
+      language: "fr",
+      messages: [{ role: "user", content: "Bonjour" }],
+    }),
+  });
+  assert.equal(response.status, 400);
 });
 
 test("reports an unavailable Voice AI service", async (t) => {

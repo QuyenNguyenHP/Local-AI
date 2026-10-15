@@ -1,0 +1,8 @@
+.git
+.gitignore
+node_modules
+dist
+npm-debug.log*
+cloudflared-linux-amd64.deb
+deploy
+DEPLOY_AI_DQTECH.md
