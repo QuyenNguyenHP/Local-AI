@@ -331,7 +331,7 @@ Input: `multipart/form-data`.
 | Field        | Type        | Required | Default  | Description                                                                   |
 | ------------ | ----------- | -------- | -------- | ----------------------------------------------------------------------------- |
 | `audio`    | Binary file | Yes      | None     | Audio file, limited by`MAX_AUDIO_BYTES` (25 MB by default).                 |
-| `language` | String      | No       | `null` | Whisper language code, such as`en` or `vi`. Omit for automatic detection. |
+| `language` | String      | No       | `null` | Whisper language code, such as `en` or `vi`. Omit it or send an empty value for automatic detection. |
 
 ```bash
 curl -X POST http://127.0.0.1:8000/v1/audio/transcriptions \
@@ -425,7 +425,7 @@ Input: `multipart/form-data`.
 | ------------------- | ----------- | -------- | ---------------- | ---------------------------------------------------------------------- |
 | `audio`           | Binary file | Yes      | None             | Recorded speech.                                                       |
 | `session_id`      | String      | No       | `default`      | Conversation ID. Use a separate ID per device to avoid mixing history. |
-| `language`        | String/null | No       | `null`         | Conversation language. Use `en` or `ja`; it selects both Whisper STT and Kokoro TTS. Omit for automatic STT detection. |
+| `language`        | String/null | No       | `null`         | Conversation language. Use `en` or `ja`; it selects both Whisper STT and Kokoro TTS. Omit it or send an empty value for automatic STT detection. |
 | `voice`           | String/null | No       | `KOKORO_VOICE` | Response voice.                                                        |
 | `model`           | String/null | No       | `OLLAMA_MODEL` | Model override for this request.                                       |
 | `response_format` | String      | No       | `audio`        | Either`audio` or `json`.                                           |

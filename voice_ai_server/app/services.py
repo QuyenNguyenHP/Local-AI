@@ -85,6 +85,9 @@ class SpeechToText:
     @stage("Whisper: audio -> text")
     async def transcribe(self, audio: bytes, language: str | None = None) -> tuple[str, str | None]:
         model = await self._get_model()
+        # Some embedded multipart clients send an empty form field instead of
+        # omitting it. Faster-Whisper expects None to enable auto-detection.
+        language = normalize_stt_language(language)
 
         def run():
             segments, info = model.transcribe(
@@ -102,6 +105,11 @@ class SpeechToText:
             result = await asyncio.to_thread(run)
         log("Whisper | language=%s, text=%d characters", result[1], len(result[0]))
         return result
+
+
+def normalize_stt_language(language: str | None) -> str | None:
+    normalized = (language or "").strip().lower()
+    return normalized or None
 
 
 TTS_LANGUAGE_ALIASES = {

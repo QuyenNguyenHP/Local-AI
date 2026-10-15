@@ -2,8 +2,8 @@
 
 ## Tài liệu nội dung trình bày với khách hàng
 
-**Phiên bản:** 1.0  
-**Ngày:** 15/10/2026  
+**Phiên bản:** 1.0
+**Ngày:** 15/10/2026
 **Mô hình ngôn ngữ:** `Qwen3:8B-Q4_K_M`
 
 ---
@@ -269,13 +269,13 @@ Chọn các đoạn phù hợp nhất
 
 Các tham số chính:
 
-| Tham số | Giá trị mặc định | Ý nghĩa |
-|---|---:|---|
-| `RAG_TOP_K` | `5` | Số đoạn kiến thức tối đa được lấy |
-| `RAG_SCORE_THRESHOLD` | `0.35` | Ngưỡng tương đồng tối thiểu |
-| `RAG_MAX_CHARS` | `9000` | Giới hạn tổng số ký tự đưa vào prompt |
-| `QDRANT_COLLECTION` | `local_ai_knowledge` | Tên collection chứa dữ liệu |
-| `OLLAMA_EMBED_MODEL` | `embeddinggemma` | Mô hình tạo embedding |
+| Tham số                |  Giá trị mặc định | Ý nghĩa                                      |
+| ----------------------- | ---------------------: | ---------------------------------------------- |
+| `RAG_TOP_K`           |                  `5` | Số đoạn kiến thức tối đa được lấy   |
+| `RAG_SCORE_THRESHOLD` |               `0.35` | Ngưỡng tương đồng tối thiểu            |
+| `RAG_MAX_CHARS`       |               `9000` | Giới hạn tổng số ký tự đưa vào prompt |
+| `QDRANT_COLLECTION`   | `local_ai_knowledge` | Tên collection chứa dữ liệu                |
+| `OLLAMA_EMBED_MODEL`  |     `embeddinggemma` | Mô hình tạo embedding                       |
 
 Khi thay đổi mô hình embedding, cần lập chỉ mục lại toàn bộ kho kiến thức để đảm bảo vector tài liệu và vector truy vấn có cùng không gian biểu diễn.
 
@@ -312,13 +312,13 @@ Tên model hiển thị trong Ollama có thể là một alias riêng, nhưng mo
 
 ### Tham số inference
 
-| Cấu hình | Giá trị hiện tại/mặc định | Tác dụng |
-|---|---:|---|
-| Temperature | `0.6` | Điều chỉnh mức độ đa dạng của câu trả lời |
-| `OLLAMA_NUM_CTX` | `4096` | Kích thước context window |
-| `OLLAMA_NUM_PREDICT` | `1024` | Số token sinh tối đa theo cấu hình |
-| `OLLAMA_THINK` | `false` | Không yêu cầu xuất nội dung suy luận |
-| `OLLAMA_KEEP_ALIVE` | `30m` | Yêu cầu Ollama giữ model trong bộ nhớ |
+| Cấu hình             | Giá trị hiện tại/mặc định | Tác dụng                                            |
+| ---------------------- | -------------------------------: | ----------------------------------------------------- |
+| Temperature            |                          `0.6` | Điều chỉnh mức độ đa dạng của câu trả lời |
+| `OLLAMA_NUM_CTX`     |                         `4096` | Kích thước context window                          |
+| `OLLAMA_NUM_PREDICT` |                         `1024` | Số token sinh tối đa theo cấu hình               |
+| `OLLAMA_THINK`       |                        `false` | Không yêu cầu xuất nội dung suy luận            |
+| `OLLAMA_KEEP_ALIVE`  |                          `30m` | Yêu cầu Ollama giữ model trong bộ nhớ            |
 
 Các giá trị này có thể điều chỉnh theo GPU, độ dài tài liệu và yêu cầu thời gian phản hồi.
 
@@ -332,12 +332,12 @@ Chức năng: Speech-to-Text.
 
 Các cấu hình chính:
 
-| Cấu hình | Giá trị mặc định |
-|---|---|
-| `WHISPER_MODEL` | `small` |
-| `WHISPER_DEVICE` | `auto` |
-| `WHISPER_COMPUTE_TYPE` | `int8` |
-| `WHISPER_BEAM_SIZE` | `1` |
+| Cấu hình               | Giá trị mặc định |
+| ------------------------ | --------------------- |
+| `WHISPER_MODEL`        | `small`             |
+| `WHISPER_DEVICE`       | `auto`              |
+| `WHISPER_COMPUTE_TYPE` | `int8`              |
+| `WHISPER_BEAM_SIZE`    | `1`                 |
 
 Máy chủ có thể dùng CUDA để tăng tốc Whisper. Cấu hình GPU phù hợp là CUDA 12, cuBLAS cho CUDA 12 và cuDNN 9.
 
@@ -369,14 +369,14 @@ Base URL:
 http://SERVER_IP:8000
 ```
 
-| Method | Endpoint | Chức năng | Kết quả |
-|---|---|---|---|
-| `GET` | `/healthz` | Kiểm tra API đang hoạt động | JSON |
-| `POST` | `/v1/audio/transcriptions` | Chuyển âm thanh thành văn bản | JSON text |
-| `POST` | `/v1/chat/completions` | Text chat với RAG và Qwen | JSON hoặc text stream |
-| `POST` | `/v1/images/chat` | Phân tích hình ảnh bằng model vision | JSON text |
-| `POST` | `/v1/audio/speech` | Chuyển văn bản thành giọng nói | WAV |
-| `POST` | `/v1/voice/chat` | Pipeline trợ lý giọng nói hoàn chỉnh | WAV hoặc JSON |
+| Method   | Endpoint                     | Chức năng                                | Kết quả              |
+| -------- | ---------------------------- | ------------------------------------------ | ---------------------- |
+| `GET`  | `/healthz`                 | Kiểm tra API đang hoạt động           | JSON                   |
+| `POST` | `/v1/audio/transcriptions` | Chuyển âm thanh thành văn bản         | JSON text              |
+| `POST` | `/v1/chat/completions`     | Text chat với RAG và Qwen                | JSON hoặc text stream |
+| `POST` | `/v1/images/chat`          | Phân tích hình ảnh bằng model vision  | JSON text              |
+| `POST` | `/v1/audio/speech`         | Chuyển văn bản thành giọng nói       | WAV                    |
+| `POST` | `/v1/voice/chat`           | Pipeline trợ lý giọng nói hoàn chỉnh | WAV hoặc JSON         |
 
 ### Ví dụ voice chat
 
@@ -641,12 +641,12 @@ HTTP response
 
 Mã lỗi chính:
 
-| HTTP status | Ý nghĩa thường gặp |
-|---:|---|
-| `401` | API key thiếu hoặc không hợp lệ |
-| `413` | Audio rỗng hoặc vượt quá dung lượng cho phép |
-| `422` | Dữ liệu đầu vào hoặc định dạng không hợp lệ |
-| `503` | Whisper, Qdrant, Ollama hoặc Kokoro không sẵn sàng |
+| HTTP status | Ý nghĩa thường gặp                                 |
+| ----------: | ------------------------------------------------------- |
+|     `401` | API key thiếu hoặc không hợp lệ                    |
+|     `413` | Audio rỗng hoặc vượt quá dung lượng cho phép    |
+|     `422` | Dữ liệu đầu vào hoặc định dạng không hợp lệ |
+|     `503` | Whisper, Qdrant, Ollama hoặc Kokoro không sẵn sàng  |
 
 Log có thời gian cho từng stage, giúp xác định thành phần gây chậm hoặc lỗi.
 
@@ -850,8 +850,8 @@ Nội dung tài liệu được tổng hợp từ:
 
 ## Customer presentation content
 
-**Version:** 1.0  
-**Date:** October 15, 2026  
+**Version:** 1.0
+**Date:** October 15, 2026
 **Language model:** `Qwen3:8B-Q4_K_M`
 
 ---
@@ -1115,13 +1115,13 @@ Add the passages to the Qwen prompt
 
 Main settings:
 
-| Setting | Default | Purpose |
-|---|---:|---|
-| `RAG_TOP_K` | `5` | Maximum number of retrieved passages |
-| `RAG_SCORE_THRESHOLD` | `0.35` | Minimum similarity score |
-| `RAG_MAX_CHARS` | `9000` | Maximum retrieved text added to the prompt |
-| `QDRANT_COLLECTION` | `local_ai_knowledge` | Vector collection name |
-| `OLLAMA_EMBED_MODEL` | `embeddinggemma` | Embedding model |
+| Setting                 |                Default | Purpose                                    |
+| ----------------------- | ---------------------: | ------------------------------------------ |
+| `RAG_TOP_K`           |                  `5` | Maximum number of retrieved passages       |
+| `RAG_SCORE_THRESHOLD` |               `0.35` | Minimum similarity score                   |
+| `RAG_MAX_CHARS`       |               `9000` | Maximum retrieved text added to the prompt |
+| `QDRANT_COLLECTION`   | `local_ai_knowledge` | Vector collection name                     |
+| `OLLAMA_EMBED_MODEL`  |     `embeddinggemma` | Embedding model                            |
 
 Changing the embedding model requires rebuilding the knowledge index so document and query vectors use the same representation space.
 
@@ -1158,13 +1158,13 @@ Ollama may display a custom alias, but the underlying deployment model for this 
 
 ### Inference settings
 
-| Setting | Current/default value | Purpose |
-|---|---:|---|
-| Temperature | `0.6` | Controls response variation |
-| `OLLAMA_NUM_CTX` | `4096` | Context-window size |
-| `OLLAMA_NUM_PREDICT` | `1024` | Configured maximum generated tokens |
-| `OLLAMA_THINK` | `false` | Does not request thinking output |
-| `OLLAMA_KEEP_ALIVE` | `30m` | Requests that Ollama keep the model loaded |
+| Setting                | Current/default value | Purpose                                    |
+| ---------------------- | --------------------: | ------------------------------------------ |
+| Temperature            |               `0.6` | Controls response variation                |
+| `OLLAMA_NUM_CTX`     |              `4096` | Context-window size                        |
+| `OLLAMA_NUM_PREDICT` |              `1024` | Configured maximum generated tokens        |
+| `OLLAMA_THINK`       |             `false` | Does not request thinking output           |
+| `OLLAMA_KEEP_ALIVE`  |               `30m` | Requests that Ollama keep the model loaded |
 
 These values can be adjusted according to GPU capacity, document length, and response-time requirements.
 
@@ -1176,12 +1176,12 @@ These values can be adjusted according to GPU capacity, document length, and res
 
 Purpose: Speech-to-Text.
 
-| Setting | Default |
-|---|---|
-| `WHISPER_MODEL` | `small` |
-| `WHISPER_DEVICE` | `auto` |
-| `WHISPER_COMPUTE_TYPE` | `int8` |
-| `WHISPER_BEAM_SIZE` | `1` |
+| Setting                  | Default   |
+| ------------------------ | --------- |
+| `WHISPER_MODEL`        | `small` |
+| `WHISPER_DEVICE`       | `auto`  |
+| `WHISPER_COMPUTE_TYPE` | `int8`  |
+| `WHISPER_BEAM_SIZE`    | `1`     |
 
 The server can use CUDA to accelerate Whisper. The documented GPU configuration uses CUDA 12, CUDA 12 cuBLAS, and cuDNN 9.
 
@@ -1211,14 +1211,14 @@ Base URL:
 http://SERVER_IP:8000
 ```
 
-| Method | Endpoint | Purpose | Response |
-|---|---|---|---|
-| `GET` | `/healthz` | Check API availability | JSON |
-| `POST` | `/v1/audio/transcriptions` | Convert audio to text | JSON text |
-| `POST` | `/v1/chat/completions` | RAG and Qwen text chat | JSON or text stream |
-| `POST` | `/v1/images/chat` | Analyze images with a vision model | JSON text |
-| `POST` | `/v1/audio/speech` | Convert text into speech | WAV |
-| `POST` | `/v1/voice/chat` | Complete voice assistant pipeline | WAV or JSON |
+| Method   | Endpoint                     | Purpose                            | Response            |
+| -------- | ---------------------------- | ---------------------------------- | ------------------- |
+| `GET`  | `/healthz`                 | Check API availability             | JSON                |
+| `POST` | `/v1/audio/transcriptions` | Convert audio to text              | JSON text           |
+| `POST` | `/v1/chat/completions`     | RAG and Qwen text chat             | JSON or text stream |
+| `POST` | `/v1/images/chat`          | Analyze images with a vision model | JSON text           |
+| `POST` | `/v1/audio/speech`         | Convert text into speech           | WAV                 |
+| `POST` | `/v1/voice/chat`           | Complete voice assistant pipeline  | WAV or JSON         |
 
 ### Voice-chat example
 
@@ -1477,12 +1477,12 @@ HTTP response
 
 Main status codes:
 
-| HTTP status | Typical meaning |
-|---:|---|
-| `401` | Missing or invalid API key |
-| `413` | Empty audio or file exceeds the configured limit |
-| `422` | Invalid input or unsupported format |
-| `503` | Whisper, Qdrant, Ollama, or Kokoro is unavailable |
+| HTTP status | Typical meaning                                   |
+| ----------: | ------------------------------------------------- |
+|     `401` | Missing or invalid API key                        |
+|     `413` | Empty audio or file exceeds the configured limit  |
+|     `422` | Invalid input or unsupported format               |
+|     `503` | Whisper, Qdrant, Ollama, or Kokoro is unavailable |
 
 Per-stage timing in the logs helps identify slow or failing components.
 
@@ -1673,4 +1673,3 @@ This document is based on:
 - `voice_ai_server/app/services.py`
 - `voice_ai_server/app/config.py`
 - Project model configuration: `Qwen3:8B-Q4_K_M`
-
