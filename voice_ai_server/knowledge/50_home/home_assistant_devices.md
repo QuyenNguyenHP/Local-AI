@@ -2,74 +2,51 @@
 id: home.home-assistant-devices
 type: home-automation
 status: active
-updated: 2026-09-20
+updated: 2026-10-19
 confidence: confirmed
 tags: [home-assistant, lights, living-room]
 ---
+# Home Assistant Devices
 
-# Thiết bị Home Assistant
+## Main Light
 
-## Đèn phòng khách
+The user may refer to this device as:
 
-Tên người dùng có thể nói:
+- turn on the light
+- turn off the light
+- living room light
+- main light
+- light
 
-- đèn phòng khách
-- điện phòng khách
-- tắt điện phòng khách
-- bật điện phòng khách
-- đèn T1
+Rules:
 
-Home Assistant entity:
-`switch.t1_chieu_sang_switch_3`
+- To turn the light on, call `home_assistant_switch` with `entity_id` set to
+  the matching value from the tool's allowed entity list and `state` set to `on`.
+- To turn the light off, call `home_assistant_switch` with `entity_id` set to
+  the matching value from the tool's allowed entity list and `state` set to `off`.
+- If exactly one entity is allowed and the user asks for "the light," use that
+  entity. The entity ID is supplied dynamically by `HA_ALLOWED_ENTITIES`.
+- If the requested room or device is ambiguous, ask the user to clarify. Do not
+  guess.
 
-Quy tắc:
+## Adding or Replacing Devices
 
-- Khi người dùng yêu cầu bật đèn hoặc điện phòng khách, gọi tool
-  `home_assistant_switch` với `entity_id` là
-  `switch.t1_chieu_sang_switch_3` và `state` là `on`.
-- Khi người dùng yêu cầu tắt đèn hoặc điện phòng khách, gọi tool
-  `home_assistant_switch` với `entity_id` là
-  `switch.t1_chieu_sang_switch_3` và `state` là `off`.
-- Nếu người dùng không nói rõ phòng hoặc thiết bị, hỏi lại; không tự đoán.
+The tool supports `light.*` and `switch.*` entity IDs. The service domain is
+selected automatically from each entity ID. For example, `light.light` uses
+`light.turn_on` and `light.turn_off`, while `switch.fan` uses `switch.turn_on`
+and `switch.turn_off`.
 
-## Thêm công tắc mới
-
-Để AI có thể điều khiển một công tắc mới, quản trị viên phải thêm chính xác
-entity ID vào biến `HA_ALLOWED_ENTITIES` trong `voice_ai_server/.env`, ngăn
-cách các entity bằng dấu phẩy. Ví dụ:
+Set the exact allowed entity IDs in `voice_ai_server/.env`, separated by commas:
 
 ```dotenv
-HA_ALLOWED_ENTITIES=switch.t1_chieu_sang_switch_3,switch.den_phong_ngu,switch.quat_phong_khach
+HA_ALLOWED_ENTITIES=light.light,switch.bedroom_light,switch.living_room_fan
 ```
 
-Sau khi sửa cấu hình, cần khởi động lại dịch vụ Voice AI. AI chỉ được phép gọi
-tool cho các entity có trong allowlist này; không được điều khiển entity ngoài
-danh sách.
+Restart the Voice AI service after changing `.env`. The AI can control only
+entities in this allowlist. Find entity IDs in Home Assistant under **Settings
+→ Devices & services → Entities**.
 
-Khi thêm một thiết bị, tạo một mục riêng theo mẫu dưới đây để AI hiểu các tên
-gọi tự nhiên của nó:
-
-```md
-## Đèn phòng ngủ
-
-Tên người dùng có thể nói:
-
-- đèn phòng ngủ
-- đèn ngủ
-
-Home Assistant entity:
-`switch.den_phong_ngu`
-
-Quy tắc:
-
-- Bật: gọi `home_assistant_switch` với `entity_id` là
-  `switch.den_phong_ngu` và `state` là `on`.
-- Tắt: gọi `home_assistant_switch` với `entity_id` là
-  `switch.den_phong_ngu` và `state` là `off`.
-```
-
-Tìm entity ID tại Home Assistant: **Settings → Devices & services → Entities**.
-Hiện tool chỉ hỗ trợ entity dạng `switch.*` vì nó gọi các dịch vụ
-`switch.turn_on` và `switch.turn_off`. Entity dạng `light.*` cần được bổ sung
-hỗ trợ trong mã nguồn trước khi đưa vào allowlist. Sau khi cập nhật tài liệu
-knowledge, chạy lại bước index knowledge nếu hệ thống đang dùng Qdrant.
+Changing only the allowlist is sufficient when the user's request clearly
+identifies the device; no entity ID is hardcoded in this document. Add a
+device-specific section only when the AI needs mappings for nicknames, rooms, or
+ambiguous natural language. Re-index Qdrant after changing this document.

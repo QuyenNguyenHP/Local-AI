@@ -1,4 +1,4 @@
-"""Allowlisted Home Assistant switch control."""
+"""Allowlisted Home Assistant light and switch control."""
 
 import json
 from typing import Any
@@ -11,6 +11,7 @@ from ..progress import log
 
 class HomeAssistantTool:
     name = "home_assistant_switch"
+    supported_domains = {"light", "switch"}
 
     def __init__(self, settings: Settings):
         self.settings = settings
@@ -20,14 +21,14 @@ class HomeAssistantTool:
             "type": "function",
             "function": {
                 "name": self.name,
-                "description": "Turn an explicitly configured Home Assistant switch on or off. Use only when the user clearly asks to control that switch.",
+                "description": "Turn an explicitly configured Home Assistant light or switch on or off. Use only when the user clearly asks to control that device.",
                 "parameters": {
                     "type": "object",
                     "properties": {
                         "entity_id": {
                             "type": "string",
                             "enum": sorted(self.settings.ha_allowed_entities),
-                            "description": "The configured Home Assistant switch entity ID.",
+                            "description": "The configured Home Assistant light or switch entity ID.",
                         },
                         "state": {
                             "type": "string",
@@ -55,10 +56,13 @@ class HomeAssistantTool:
         state = arguments.get("state")
         if not isinstance(entity_id, str) or entity_id not in self.settings.ha_allowed_entities:
             raise ValueError("That Home Assistant entity is not allowed")
+        domain = entity_id.partition(".")[0]
+        if domain not in self.supported_domains:
+            raise ValueError("Only Home Assistant light and switch entities are supported")
         if state not in {"on", "off"}:
-            raise ValueError("Switch state must be on or off")
+            raise ValueError("Device state must be on or off")
 
-        endpoint = f"{self.settings.ha_url.rstrip('/')}/api/services/switch/turn_{state}"
+        endpoint = f"{self.settings.ha_url.rstrip('/')}/api/services/{domain}/turn_{state}"
         try:
             async with httpx.AsyncClient(timeout=self.settings.ha_timeout_seconds) as client:
                 response = await client.post(
@@ -70,4 +74,4 @@ class HomeAssistantTool:
         except httpx.HTTPError as exc:
             raise ValueError("Home Assistant request failed") from exc
         log("Tool | home_assistant_switch entity=%s state=%s", entity_id, state)
-        return f"Switch {entity_id} was turned {state}."
+        return f"Home Assistant device {entity_id} was turned {state}."

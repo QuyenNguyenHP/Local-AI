@@ -243,7 +243,7 @@ Logs do not print transcripts, answers or full knowledge documents.
 ## Home Assistant tool calling (optional)
 
 The chat and voice endpoints can let a tool-capable Ollama model control a
-small, explicit allowlist of Home Assistant switches. The model does not see
+small, explicit allowlist of Home Assistant lights and switches. The model does not see
 the Home Assistant token and cannot run shell commands, call arbitrary URLs, or
 control an entity outside `HA_ALLOWED_ENTITIES`.
 
@@ -259,16 +259,14 @@ OLLAMA_MODEL=qwen3:8b
 HA_ENABLED=1
 HA_URL=https://home.dqtech.cloud
 HA_TOKEN=replace-with-a-new-dedicated-token
-HA_ALLOWED_ENTITIES=switch.t1_chieu_sang_switch_3
+HA_ALLOWED_ENTITIES=light.light,switch.example_switch
 HA_TIMEOUT_SECONDS=10
 ```
 
 Restart the server after editing `.env`. A clear request such as `Bật đèn
 phòng khách` or `Tắt switch t1` lets the model call
-`home_assistant_switch`; the server validates the entity and state, then sends
-`POST /api/services/switch/turn_on` or `turn_off` to Home Assistant. The
-endpoint shown in the question, `turn_on`, turns the switch on; use `turn_off`
-to turn it off.
+`home_assistant_switch`; the server validates the entity and state, then selects
+`light.turn_on/off` or `switch.turn_on/off` from the entity ID.
 
 Test Home Assistant independently before enabling AI control, without putting a
 real token in shell history:
